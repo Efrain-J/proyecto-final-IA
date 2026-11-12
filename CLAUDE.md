@@ -28,6 +28,15 @@ The user's explicit priority, and the assignment's: **a small scope that works e
 
 Systems must not be presented as medical, legal, or safety advice; document limitations.
 
+## Downloading data
+
+When a task requires downloading data (APIs, open-data portals, station/historical series, file dumps), consider using **`asyncio`** (e.g. `aiohttp` / `httpx.AsyncClient`) or **parallel jobs** (e.g. `concurrent.futures.ThreadPoolExecutor`, or `joblib`/multiprocessing for CPU-bound parsing) when there are many independent requests, such as one call per station, municipality, month, or year. Still:
+
+- Bound concurrency (a semaphore or a small worker count) and respect the source's rate limits; add retries with backoff and timeouts.
+- Keep download scripts idempotent and resumable: skip files that already exist in `data/` and write each file atomically.
+- Fall back to the sequential path or the local CSV snapshot if the parallel version fails, so the app keeps running (MVP first).
+- Keep the scripts runnable from the README with a single command.
+
 ## Stack
 
 Chosen to reuse two proven-working reference projects next to this repo (read them for working code, don't copy secrets):
