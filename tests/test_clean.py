@@ -14,6 +14,7 @@ from energy.rag.clean import (
     clean_document,
     extract_main_html,
     main,
+    mark_annexes,
     mark_articles,
     normalize,
     strip_links,
@@ -298,3 +299,31 @@ def test_main_returns_nonzero_when_a_document_fails(tmp_path):
     argv = ["--manifest", str(manifest), "--raw-dir", str(raw), "--clean-dir", str(out)]
     assert main(argv) != 0
     assert (out / "a.md").exists()
+
+
+# ------------------------------------------------------------- mark_annexes
+@pytest.mark.parametrize(
+    "line,heading",
+    [
+        ("ANEXO 1.", "## ANEXO 1."),
+        ("ANEXO NO. 1.", "## ANEXO 1."),
+        ("ANEXO.", "## ANEXO."),
+        ("ANEXO IV.", "## ANEXO IV."),
+    ],
+)
+def test_mark_annexes_marks_bare_annex_lines(line, heading):
+    assert mark_annexes(f"texto previo\n\n{line}\n\ncontenido") == (
+        f"texto previo\n\n{heading}\n\ncontenido"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "**ANEXO CO.4.**",
+        "El ANEXO 1. establece las condiciones.",
+        "ver el anexo 1.",
+    ],
+)
+def test_mark_annexes_leaves_quoted_or_inline_annexes(text):
+    assert mark_annexes(text) == text

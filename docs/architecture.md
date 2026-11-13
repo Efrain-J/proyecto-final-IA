@@ -41,7 +41,7 @@ flowchart LR
   LOOP --> EV2[eval.agent -> results/]
 ```
 
-**Implemented:** the XM → CSV path and web → raw → clean. Everything from `rl.*`, `rag.chunk` onward is planned.
+**Implemented:** the XM → CSV path and the whole RAG path (web → raw → clean → chunks → Qdrant → retrieve, with the BM25 fallback). `rl.*`, `agent`, `eval` and the app are planned.
 
 ## 3. Package map and dependency rules
 
@@ -62,7 +62,9 @@ energy/
     train.py         python -m energy.rl.train -> artifacts/policies/
   rag/
     clean.py         Implemented: raw -> data/corpus/clean/<id>.md
-    chunk.py, index.py, retrieve.py    Planned
+    chunk.py         Implemented: clean -> data/corpus/chunks.jsonl
+    index.py         Implemented: chunks -> Qdrant (data/qdrant/)
+    retrieve.py      Implemented: Hit, QdrantRetriever, BM25Retriever, open_retriever()
   agent/             Planned: prompts.py, tools.py, loop.py, llm.py
   eval/              Planned: part1.py, agent.py, questions.csv
   app/charts.py      Planned: pure functions -> plotly figures
@@ -89,13 +91,13 @@ results/             Planned: metrics CSVs and plots (committed)
 | `data/processed/prices_hourly.csv` | `timestamp` (naive Colombian local time, start of hour; `Hour01` = 00:00), `price_cop_kwh` (float). 2024-01-01 to 2025-12-31, 17,544 rows, no gaps (D5). |
 | `data/corpus/sources.csv` | `id, title, publisher, url, format (html\|pdf), selector, in_force (yes\|no), superseded_by, notes`. One row per document; the source of citation metadata (D6, D11). |
 | `data/corpus/raw/<id>.<format>` | The downloaded document as-is. |
-| `data/corpus/clean/<id>.md` | Clean Markdown: main content only, no links, CREG articles marked `## ARTÍCULO n.` (ascending only, D11). |
+| `data/corpus/clean/<id>.md` | Clean Markdown: main content only, no links, CREG articles marked `## ARTÍCULO n.` (ascending only, D11) and annexes marked `## ANEXO n.` (D13). |
+| `data/corpus/chunks.jsonl` | One chunk per line: `doc_id, title, publisher, article ("12", "Anexo 1" or null), in_force, superseded_by, chunk_index, text`. Committed and deterministic. It feeds the BM25 fallback and is the input to the index (D13). |
 
 **Planned**
 
 | File | Contents |
 |---|---|
-| `data/corpus/chunks.jsonl` | One chunk per line: `doc_id, title, publisher, article, in_force, superseded_by, chunk_index, text`. Committed. It feeds the BM25 fallback and makes rebuilding the index deterministic. |
 | `artifacts/policies/q_d{1,2,4}h.npz` + `.json` | Q-table plus metadata: seed, episodes, training range, discretizer bin edges, battery duration. Committed (KB-sized). |
 | `results/*.csv`, `results/*.png` | Part 1 metrics and the agent evaluation. Committed as evidence for the report. |
 
@@ -188,13 +190,14 @@ def simulate(policy: str | Policy, start: date, end: date,
 ## 7. RAG pipeline
 
 1. **Download** (Implemented): `python -m energy.data.corpus`, driven by the manifest.
-2. **Clean** (Implemented): `python -m energy.rag.clean`. Main-content selector → markitdown → strip links → normalize → mark CREG articles (D11).
-3. **Chunk** (Planned): `rag/chunk.py`, two strategies.
-   - **CREG** documents are split on `^## ART[ÍI]CULO (\d+)`, keeping the heading line *in the chunk text*. The headings carry the article's first paragraph, so dropping them, as `MarkdownHeaderTextSplitter` does by default, would lose content. A long article is split further with the recursive splitter, and each piece keeps its `article`.
+2. **Clean** (Implemented): `python -m energy.rag.clean`. Main-content selector → markitdown → strip links → normalize → mark CREG articles (D11) and annexes (D13).
+3. **Chunk** (Implemented, D13): `python -m energy.rag.chunk`, two strategies.
+   - **CREG** documents are split on `## ARTÍCULO n` and `## ANEXO n.` headings, keeping the heading line *in the chunk text*. The headings carry the article's first paragraph, so dropping them, as `MarkdownHeaderTextSplitter` does by default, would lose content. A long section is split further with the recursive splitter, and each piece keeps its label (`"12"`, `"Anexo 1"`).
+   - The embedded and BM25 text is `embedding_text(chunk)`: title + article/annex header + text.
    - **Everything else** uses `RecursiveCharacterTextSplitter` (~900 / 120, drop chunks under 30 characters).
    - Metadata comes from the manifest. Output: `chunks.jsonl`.
-4. **Index** (Planned): `rag/index.py`. NVIDIA `nemotron-3-embed-1b` → Qdrant at `data/qdrant/` (cosine, embedding dimension probed at runtime). Run once; the app only opens it. The index is **not committed** (D8).
-5. **Retrieve** (Planned): `rag/retrieve.py`.
+4. **Index** (Implemented, D13): `rag/index.py`. NVIDIA `nemotron-3-embed-1b` → Qdrant at `data/qdrant/` (cosine, embedding dimension probed at runtime). Run once; the app only opens it. The index is **not committed** (D8).
+5. **Retrieve** (Implemented, D13): `rag/retrieve.py`.
 
 ```python
 @dataclass(frozen=True)
@@ -292,8 +295,8 @@ def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
 |---|---|---|---|
 | XM API | Not used at runtime | Committed CSV snapshot | Implemented |
 | CREG / XM websites | Not used at runtime | Committed raw and clean documents | Implemented |
-| NVIDIA embeddings | Query-time embedding | `BM25Retriever` over the committed `chunks.jsonl` (no torch, no second index) | Planned |
-| Qdrant | Opened once through `cache_resource` | BM25 if opening fails (lock, missing index, version) | Planned |
+| NVIDIA embeddings | Query-time embedding | `BM25Retriever` over the committed `chunks.jsonl` (no torch, no second index), chosen by `open_retriever()` | Implemented |
+| Qdrant | Opened once (the app will cache `open_retriever()`) | BM25 if opening fails (lock, missing index, version) | Implemented |
 | Groq | Ordered model list, one retry | Retrieval-only answer: the error plus the top passages with citations | Planned |
 | Q-table missing | Load from `artifacts/policies/` | `Threshold` baseline, with a visible warning | Planned |
 
@@ -314,7 +317,7 @@ Training uses a fixed seed that is recorded in the policy's `.json`. Before subm
 ## 13. Testing
 
 - `uv run pytest` runs offline. HTTP is mocked with `httpx.MockTransport`. Tests that call real services are marked `network` and are skipped by default (`uv run pytest -m network` to run them).
-- **Implemented:** `tests/test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_clean.py`.
+- **Implemented:** `tests/test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_clean.py`, `test_chunk.py`, `test_index.py`, `test_retrieve.py` (fake embedder + in-memory Qdrant).
 - **Planned:**
   - `step()` invariants (efficiency, SoC bounds)
   - `simulate()` on a tiny synthetic price series

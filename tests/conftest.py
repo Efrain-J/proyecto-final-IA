@@ -110,3 +110,80 @@ def xm_handler_factory(make_payload):
         return handler, calls
 
     return factory
+
+
+# --- RAG fixtures (chunking, index, retrieval; offline) ---
+
+FAKE_DIM = 32
+
+
+def fake_vector(text: str, dim: int = FAKE_DIM) -> list[float]:
+    """Deterministic hashed bag-of-words vector, unit length."""
+    import hashlib
+    import math
+    import re
+
+    vec = [0.0] * dim
+    for word in re.findall(r"\w+", text.lower()):
+        bucket = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16) % dim
+        vec[bucket] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [v / norm for v in vec]
+
+
+@pytest.fixture
+def fake_dim():
+    return FAKE_DIM
+
+
+@pytest.fixture
+def fake_embed_documents():
+    """embed_documents(list[str]) -> list[list[float]] with FAKE_DIM dimensions."""
+    return lambda texts: [fake_vector(t) for t in texts]
+
+
+@pytest.fixture
+def fake_embed_query():
+    """embed_query(str) -> list[float] with FAKE_DIM dimensions."""
+    return fake_vector
+
+
+@pytest.fixture
+def make_chunk():
+    """Factory for a Chunk with sensible defaults; override any field by keyword."""
+    from energy.rag.chunk import Chunk
+
+    def _make(**overrides):
+        fields = dict(
+            doc_id="doc",
+            title="Resolución X",
+            publisher="CREG",
+            article=None,
+            in_force=True,
+            superseded_by="",
+            chunk_index=0,
+            text="Texto de ejemplo suficientemente largo para ser un fragmento válido.",
+        )
+        fields.update(overrides)
+        return Chunk(**fields)
+
+    return _make
+
+
+@pytest.fixture
+def sample_chunks(make_chunk):
+    """Three chunks with distinctive vocabulary, from three documents."""
+    return [
+        make_chunk(
+            doc_id="creg131", title="Resolución CREG 131", article="2", chunk_index=0,
+            text="Usuario no regulado: potencia máxima de 0.1 MW o energía mensual mínima.",
+        ),
+        make_chunk(
+            doc_id="xmglosario", title="Glosario XM", chunk_index=0,
+            text="Despacho ideal: programación del sistema sin restricciones de red.",
+        ),
+        make_chunk(
+            doc_id="xmbolsa", title="Preguntas XM", chunk_index=0,
+            text="El precio de bolsa se determina cada hora según la oferta de generadores.",
+        ),
+    ]

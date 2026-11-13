@@ -34,7 +34,11 @@ Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` an
 - `energy/data/io.py`: atomic file writes.
 - `energy/data/xm_prices.py`: XM bolsa prices through the XM API called directly (`pydataxm` is incompatible with pandas 3). `uv run python -m energy.data.xm_prices` writes `data/raw/xm/*.json` and `data/processed/prices_hourly.csv`. It's resumable; `--force` re-downloads.
 - `energy/data/corpus.py`: RAG documents listed in `data/corpus/sources.csv`. `uv run python -m energy.data.corpus` writes to `data/corpus/raw/`. The manifest columns `selector`, `in_force` and `superseded_by` drive the cleaning and the citations.
-- `energy/rag/clean.py`: raw → `data/corpus/clean/<id>.md` (main-content selector, links stripped, `## ARTÍCULO n.` headings for CREG articles in ascending order only). Run with `uv run python -m energy.rag.clean`, after adding or changing a document.
+- `energy/rag/clean.py`: raw → `data/corpus/clean/<id>.md` (main-content selector, links stripped, `## ARTÍCULO n.` headings for CREG articles in ascending order only). Run with `uv run python -m energy.rag.clean`, after adding or changing a document. Annexes are marked `## ANEXO n.`.
+- `energy/rag/chunk.py`: clean → `data/corpus/chunks.jsonl` (committed). Splits by article/annex, each chunk labeled `article` = `"12"` / `"Anexo 1"` / null. Run with `uv run python -m energy.rag.chunk`.
+- `energy/rag/index.py`: chunks → Qdrant at `data/qdrant/` (gitignored) with NVIDIA embeddings. Needs `NVIDIA_API_KEY`, takes about 45 s. Run with `uv run python -m energy.rag.index`.
+- `energy/rag/retrieve.py`: `open_retriever()` returns Qdrant+NVIDIA, or BM25 over `chunks.jsonl` as fallback; `Hit.citation` gives the citation. Manual check: `uv run python -m energy.rag.retrieve "pregunta" [--bm25]`.
+- Full RAG rebuild order after changing the corpus: `energy.data.corpus` → `energy.rag.clean` → `energy.rag.chunk` → `energy.rag.index`.
 - `tests/`: pytest, with HTTP mocked through `httpx.MockTransport`.
 
 ## Guiding principle: MVP first

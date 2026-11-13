@@ -41,6 +41,12 @@ _ARTICLE = re.compile(
     re.MULTILINE,
 )
 _HEADING = re.compile(r"^## ART[ÍI]CULO", re.MULTILINE)
+# A real annex heading is a bare line: "ANEXO.", "ANEXO 1.", "ANEXO NO. 1.".
+# Quoted annexes of other resolutions are bold ("**ANEXO CO.4.**") and must stay
+# inside the amending article, so bold or decorated lines don't match.
+_ANNEX = re.compile(
+    r"^ANEXO(?:\s+(?:NO\.\s*)?([0-9]+|[IVX]+))?\s*\.[ \t]*$", re.MULTILINE
+)
 
 
 class CleaningError(ValueError):
@@ -147,6 +153,18 @@ def mark_articles(md: str) -> str:
     return _ARTICLE.sub(_mark, md)
 
 
+def mark_annexes(md: str) -> str:
+    """Turn bare annex lines (``ANEXO 1.``, ``ANEXO NO. 1.``, ``ANEXO.``) into headings.
+
+    Without this, annex text that follows the last article would be cited as
+    that article (e.g. CREG 131's Anexo 1 as "Art. 8"). The output is
+    ``## ANEXO 1.`` or ``## ANEXO.``; see D13.
+    """
+    return _ANNEX.sub(
+        lambda m: f"## ANEXO {m.group(1)}." if m.group(1) else "## ANEXO.", md
+    )
+
+
 def clean_document(source: Source, raw_path: Path) -> str:
     """Clean one raw document into Markdown text.
 
@@ -155,7 +173,8 @@ def clean_document(source: Source, raw_path: Path) -> str:
         raw_path: The downloaded file.
 
     Returns:
-        Clean Markdown. Article headings are marked for HTML (CREG) documents only.
+        Clean Markdown. Article and annex headings are marked for HTML (CREG)
+        documents only.
 
     Raises:
         CleaningError: If an HTML source has no selector or the selector matches nothing.
@@ -166,7 +185,7 @@ def clean_document(source: Source, raw_path: Path) -> str:
             raise CleaningError(f"No selector for HTML source {source.id}")
         html = extract_main_html(data, source.selector)
         md = to_markdown(html.encode("utf-8"), ".html")
-        return mark_articles(normalize(strip_links(md)))
+        return mark_annexes(mark_articles(normalize(strip_links(md))))
     return normalize(strip_links(to_markdown(data, ".pdf")))
 
 

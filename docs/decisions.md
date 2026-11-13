@@ -111,6 +111,19 @@ The two combine: define the presets as a few durations (e.g., 1 h, 2 h, 4 h) tim
 - **Article-level citations:** a CREG line starting with `ARTÍCULO <n>.` becomes a `## ` heading, so chunks can carry an `article` field and the agent can cite "CREG 101 113 de 2026, Art. 12". Only article numbers higher than the previous one are marked. When a resolution amends another, it quotes the amended article (Art. 80 of 101 113 quotes "ARTÍCULO 6o." of CREG 055 of 1994), and that quoted text has to stay inside the amending article. Result: 108 articles in 101 113, 38 in 098, 31 in 174, 8 in 131.
 - **In-force flag:** `in_force=no` and `superseded_by` in the manifest (currently only CREG 098 of 2019 → 101 113 of 2026). It will become chunk metadata, so the agent can say a rule was replaced instead of quoting it as current.
 
+## D13. Chunking, index and retrieval
+
+**Status:** Decided (2026-11-12)
+
+- **Chunking** (`uv run python -m energy.rag.chunk` → `data/corpus/chunks.jsonl`, committed, deterministic). CREG documents are split on `## ARTÍCULO n` **and `## ANEXO n.`** headings, keeping the heading line in the chunk text. Long sections are split further (`RecursiveCharacterTextSplitter`, 900 / 120, drop chunks under 30 characters), and every piece keeps its section label (`"12"`, `"Anexo 1"`). XM documents are split directly. Result: **984 chunks**; 90% of CREG chunks carry an article or annex label, and the rest are preambles.
+- **Annexes as their own sections:** the first run labeled all annex text as the last article. For example, CREG 131's eligibility rules (Anexo 1) were cited as "Art. 8". `clean.mark_annexes` now marks bare `ANEXO n.` lines. Bold quoted annexes of other resolutions (`**ANEXO CO.4.**` inside Art. 95 of 101 113) stay inside the amending article, as quoted articles do (D11).
+- **Embedding text:** `"{title} — Artículo n"` (or `— Anexo n`), a blank line, then the chunk text. A continuation piece of a long article stays findable by its document and article, while the displayed text stays clean.
+- **Index** (`uv run python -m energy.rag.index`): NVIDIA `nemotron-3-embed-1b` (dimension 2048), `qdrant-client` used directly (no `langchain_qdrant`), collection `regulacion`, cosine, at `data/qdrant/` (gitignored, D8). About 42 s for 984 chunks. `.env` is loaded in the entry point only.
+- **Retrieval** (`energy/rag/retrieve.py`): `Hit` with a `citation` such as "Resolución CREG 131 de 1998 …, Anexo 1", plus `in_force` / `superseded_by`. `open_retriever()` uses Qdrant + NVIDIA when the key and the index exist, and otherwise falls back to our own **BM25** over `chunks.jsonl`. Manual check: `uv run python -m energy.rag.retrieve "pregunta" [--bm25]`.
+- **Threshold 0.25 kept.** In the sample questions, relevant hits score 0.37–0.68, and the out-of-corpus question ("receta de arepas") tops out at 0.12, so it gets 0 hits. Observations for the agent prompt and the evaluation:
+  - For "eficiencia mínima… SAEB", the top hit is the **replaced** CREG 098, and the current 101 113 Art. 6 comes second. The agent must use `in_force` to prefer the current rule.
+  - For the non-regulated-user limit, the XM FAQ (which quotes CREG 131: 0.1 MW or 55 MWh/month) ranks first. CREG 131 Art. 2 itself is only in BM25's top 5.
+
 ## D7. Python environment: uv, Python 3.12, with `requirements.txt` exported
 
 **Status:** Decided (2026-11-12)
