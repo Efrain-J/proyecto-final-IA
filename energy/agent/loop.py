@@ -3,8 +3,12 @@
 ``run_agent`` asks the model, runs the tools it requests and feeds the observations back,
 for at most ``t_max`` tool rounds; if the rounds run out it makes one last call with tools
 switched off (at most ``t_max + 1`` LLM calls). It never raises: an ``LLMError`` becomes a
-retrieval-only answer. Citations in the answer are checked against what ``search_regulation``
-returned during this run.
+retrieval-only answer. Citations in the model's text are checked against what
+``search_regulation`` returned during this run.
+
+Simulation figures are not written by the model: the successful ``simulate_battery`` results
+are rendered by ``energy.agent.render`` into a block placed before the model's text, on every
+path (D16).
 
 ``open_agent`` assembles the real retriever, tools and Groq chat for the app and the
 evaluation; entry points call ``config.load_env()`` first. Manual check:
@@ -24,6 +28,7 @@ import pandas as pd
 from energy import config
 from energy.agent.llm import ChatFn, LLMError, make_groq_chat
 from energy.agent.prompts import REFUSAL, system_prompt
+from energy.agent.render import render_results
 from energy.agent.tools import Tool, build_registry, run_tool, tool_schemas
 from energy.rag.retrieve import Retriever, open_retriever
 
@@ -50,12 +55,15 @@ class AgentResult:
     """Outcome of ``run_agent``.
 
     Attributes:
-        answer: Final text shown to the user.
+        answer: Final text shown to the user: ``results_block`` then ``model_text``.
         tool_calls: Tool calls in order.
         citations: Cited sources that ``search_regulation`` returned in this run.
         unverified_citations: Cited sources that it did not.
         stopped: ``answer`` (normal), ``t_max`` (round cap hit) or ``llm_error``.
         retriever: Name of the retriever seen in a search result, or "".
+        simulations: Successful ``simulate_battery`` results, in call order.
+        results_block: Deterministic rendering of ``simulations``, or "".
+        model_text: What the model wrote (tables removed when a block exists).
     """
 
     answer: str
@@ -64,6 +72,19 @@ class AgentResult:
     unverified_citations: list[str] = field(default_factory=list)
     stopped: Literal["answer", "t_max", "llm_error"] = "answer"
     retriever: str = ""
+    simulations: list[dict[str, Any]] = field(default_factory=list)
+    results_block: str = ""
+    model_text: str = ""
+
+
+def _strip_tables(text: str) -> str:
+    """Drop Markdown table lines: the results block is the only source of tables (D16)."""
+    kept = [ln for ln in text.splitlines() if not ln.lstrip().startswith("|")]
+    return "\n".join(kept).strip()
+
+
+def _compose(block: str, text: str) -> str:
+    return f"{block}\n\n{text}" if block and text else block or text
 
 
 def _norm(text: str) -> str:
@@ -74,6 +95,21 @@ def _normalize_brackets(answer: str) -> str:
     """Turn gpt-oss's native 【…】 citations into [...] and drop a "cita:" prefix (D16)."""
     answer = answer.replace("【", "[").replace("】", "]")
     return re.sub(r"\[\s*cita\s*:\s*", "[", answer, flags=re.IGNORECASE)
+
+
+# Figures the results block already shows; the model never sees them, so it can't
+# restate them wrongly (it once wrote 3.131.505 for 3.131.506, D16).
+_HIDDEN_FROM_MODEL = ("savings_cop", "baselines", "vs_best_rule", "vs_perfect_foresight", "energy")
+
+
+def _model_view(result: dict) -> str:
+    """JSON observation for the model: the simulation without the figures in the block."""
+    view = {k: v for k, v in result.items() if k not in _HIDDEN_FROM_MODEL}
+    view["resultados"] = (
+        "El ahorro, la tabla y la comparación ya se muestran al usuario en un bloque "
+        "automático; no escribas cifras de ahorro ni porcentajes de comparación."
+    )
+    return json.dumps(view, ensure_ascii=False)
 
 
 def _repair_request(citas: list[str]) -> str:
@@ -138,6 +174,7 @@ def run_agent(
     retrieved: set[str] = set()
     retrieved_citas: list[str] = []  # original spelling, for the repair request
     retriever = ""
+    simulations: list[dict[str, Any]] = []
     answer, stopped = "", "answer"
 
     try:
@@ -166,6 +203,9 @@ def run_agent(
                 records.append(
                     ToolCallRecord(call.name, arguments if isinstance(arguments, dict) else {}, error is None, error)
                 )
+                if call.name == "simulate_battery" and error is None:
+                    simulations.append(parsed)
+                    raw = _model_view(parsed)
                 if call.name == "search_regulation" and error is None:
                     retriever = parsed.get("retriever", retriever)
                     for hit in parsed.get("hits", []):
@@ -178,16 +218,27 @@ def run_agent(
             answer = chat(messages + [{"role": "user", "content": NUDGE}], None).content or ""
     except LLMError as exc:
         logger.warning("LLM failed: %s", exc)
+        text = _fallback_answer(exc, registry, question)
+        block = render_results(simulations)
         return AgentResult(
-            answer=_fallback_answer(exc, registry, question),
+            answer=_compose(block, text),
             tool_calls=records,
             citations=[],
             unverified_citations=[],
             stopped="llm_error",
             retriever=retriever,
+            simulations=simulations,
+            results_block=block,
+            model_text=text,
         )
 
-    answer = _normalize_brackets(answer)
+    block = render_results(simulations)
+
+    def clean(text: str) -> str:
+        text = _normalize_brackets(text)
+        return _strip_tables(text) if block else text
+
+    answer = clean(answer)
     valid, unverified = _split_citations(answer, retrieved)
     if stopped == "answer" and retrieved and not valid and answer.strip() != REFUSAL:
         # One repair round, outside t_max: the model sometimes drops or garbles the
@@ -201,11 +252,14 @@ def run_agent(
         except LLMError as exc:
             logger.warning("Citation repair failed: %s", exc)
         else:
-            repaired = _normalize_brackets(repaired)
+            repaired = clean(repaired)
             new_valid, new_unverified = _split_citations(repaired, retrieved)
             if new_valid:
                 answer, valid, unverified = repaired, new_valid, new_unverified
-    return AgentResult(answer, records, valid, unverified, stopped, retriever)  # type: ignore[arg-type]
+    return AgentResult(
+        _compose(block, answer), records, valid, unverified, stopped, retriever,  # type: ignore[arg-type]
+        simulations, block, answer,
+    )
 
 
 def open_agent(retriever: Retriever | None = None) -> tuple[dict[str, Tool], ChatFn]:

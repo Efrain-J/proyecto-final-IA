@@ -67,7 +67,7 @@ energy/
     chunk.py         Implemented: clean -> data/corpus/chunks.jsonl
     index.py         Implemented: chunks -> Qdrant (data/qdrant/)
     retrieve.py      Implemented: Hit, QdrantRetriever, BM25Retriever, open_retriever()
-  agent/             Implemented (D16): llm.py, tools.py, prompts.py, loop.py, __main__.py
+  agent/             Implemented (D16): llm.py, tools.py, prompts.py, render.py, loop.py, __main__.py
   eval/              Planned: part1.py, agent.py, questions.csv
   app/charts.py      Planned: pure functions -> plotly figures
 app.py               Planned: thin Streamlit entry point
@@ -264,14 +264,19 @@ def run_tool(registry, name, raw_args) -> tuple[str, dict]   # never raises: {"e
 # loop.py
 ToolCallRecord(name, arguments, ok, error)
 AgentResult(answer, tool_calls, citations, unverified_citations,
-            stopped: Literal["answer", "t_max", "llm_error"], retriever)
+            stopped: Literal["answer", "t_max", "llm_error"], retriever,
+            simulations, results_block, model_text)   # answer = results_block + model_text
+
+# render.py (pure)
+def cop(x) -> str; def pct(x) -> str; POLICY_NAMES
+def render_results(results: list[dict]) -> str   # "" | render_simulation | render_comparison
 def run_agent(question, history, registry, chat, t_max=config.T_MAX) -> AgentResult   # never raises
 def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the eval call this
 ```
 
 - **Tools:**
   - `search_regulation(query, k)`: hits with `cita`, `in_force`, `superseded_by`, text up to 1,500 characters.
-  - `simulate_battery(policy, preset, start_date, end_date)`: one calendar year at most; mean, min and max over the 5 test shift calendars, the baselines, `comparison`, `by_hour_block`, `by_price_level`, `in_sample` and `notes`. Never the hourly trace.
+  - `simulate_battery(policy, preset, start_date, end_date)`: one calendar year at most; mean, min and max over the 5 test shift calendars, the baselines, `comparison`, `by_hour_block`, `by_price_level`, `in_sample`, `notes` and `field_guide`. Never the hourly trace. The model sees this without the figures. The loop renders them into a results block with `render.py`, so every peso and percentage comes from code.
 - **Loop:**
   - up to `T_MAX` (5) tool rounds, then one call with the tools off
   - a citation repair round when a search returned hits but the answer has no valid citation

@@ -395,10 +395,10 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
     - **It returns:**
       - the mean, min and max savings
       - the baseline means and the best fixed rule
-      - a pre-written `comparison` sentence. The model once flipped the sign of the percentage, so the code writes this sentence.
       - `by_hour_block` (12 rows) and `by_price_level` (4 quartile rows). These profiles are what let the agent explain the decisions.
       - `in_sample`, true when the range overlaps the training months
-      - `notes`, the assumptions A2, A4 and A5
+      - `notes`, the assumptions shown to the user (A4, A5)
+      - `field_guide`, which tells the model only what the fields mean (COP/kWh, and what the % of hours means)
     - **Speed:** about 0.3 s for 3 months and 0.9 s for a year.
 - **T_max = 5 tool rounds.** After that, one last call with the tools off (`stopped="t_max"`). Tool errors return as `{"error": ...}` observations and never raise.
 - **Without the LLM** (no key, or every model failing): a retrieval-only answer with the top 3 passages and their citations (`stopped="llm_error"`).
@@ -414,13 +414,21 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
   - numbers only from `simulate_battery`, in COP/kWh
   - no general knowledge beyond the tools
   - "¿por qué carga…?" questions always call `simulate_battery`
-- **Answer formats** (agreed with the user):
-  - **Simulation:** a bold mean-and-range line, a 3-row table `Política | Ahorro promedio (COP)`, the comparison sentence, a **Supuestos** line, and `*Fuente: simulación propia con precios de bolsa de XM, <año>.*`
-  - **Comparisons:** `Batería | Q-learning | Mejor regla | % del óptimo`, at most 6 rows.
-  - **Tables appear only for simulation results.** Regulation answers are short paragraphs ending in citations, then a "no es asesoría legal" line.
+- **Simulation results are written by code, not by the model** (changed 2026-11-13, after the live check):
+  - **Why:** in the live check the model changed a digit in the table and flipped the sign of the comparison.
+  - **The block:** `energy/agent/render.py` builds it from the tool output, and the loop puts it at the top of the answer. It contains:
+    - **one simulation:** a bold mean-and-range line, a 3-row table `Política | Ahorro promedio (COP)`, the comparison sentence (sign computed from the numbers), the fallback and in-sample notes when they apply, **Supuestos**, and `*Fuente: simulación propia con precios de bolsa de XM, <año>.*`
+    - **several simulations:** a table `Escenario | Ahorro promedio (COP) | Mejor regla (COP) | % del óptimo`, at most 6 rows, labelled only by what varies (battery, period or policy). This replaces the earlier `Batería | Q-learning | …` header, which assumed only presets varied.
+  - **Number formats (es-CO):** `3.131.506 COP` and `5,3 %`.
+  - **The model never sees the figures.** Its view of a simulation omits the savings, the baselines, the comparison percentages and the energy totals. It once restated 3.131.505 for 3.131.506, so now it can't.
+  - **What the model writes:** only the explanation (from the hour and price profiles) and any regulation part, with no tables. Any table lines it writes are removed when a block exists.
+  - **Every path keeps the block:** a normal answer, the T_max cap, and an LLM failure after a simulation.
+  - **Citations are checked on the model's text only.**
+  - **`AgentResult` gained** `simulations`, `results_block` and `model_text`.
+- **Regulation answers:** short paragraphs ending in citations, then a "no es asesoría legal" line.
 - **Live check:**
   - **What passed:** the regulation, simulation, mixed and trap questions behaved as specified; the network tests passed in 4 out of 4 runs.
-  - **Known weakness:** the model copies numbers by hand, and once changed a digit in the table (2.970.674 instead of 2.974.674). The agent evaluation should compare the table with the tool output.
+  - **The model changed a digit when copying numbers by hand** (2.970.674 instead of 2.974.674). That's why the results block above is written by code.
 
 ## D10. Call XM's API directly instead of `pydataxm`
 

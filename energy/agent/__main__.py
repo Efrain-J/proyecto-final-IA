@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\n--- tool calls ---")
     for call in result.tool_calls:
         print(f"{call.name} {call.arguments} ok={call.ok}" + (f" error={call.error}" if call.error else ""))
+    print(f"simulations in the results block: {len(result.simulations)}")
     print("--- citations ---")
     print("valid:", result.citations)
     print("unverified:", result.unverified_citations)

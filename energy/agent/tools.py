@@ -38,29 +38,18 @@ MIX = "default"
 TRAIN_LAST_MONTH = 9  # D5
 RULES = ("night_day", "shift_schedule", "price_threshold")
 REFERENCE_POLICIES = ("no_battery", *RULES, "perfect_foresight")
+# Assumptions shown to the user in the results block (render.py).
 NOTES = (
-    "Los turnos de la planta son sintéticos (supuesto A5) y la batería conoce el precio de "
-    "bolsa de la hora al decidir, lo que hace el ahorro optimista (A4). Ahorro en COP, sin la "
-    "carga total de la planta (A2); no incluye el costo de la batería ni su degradación. "
+    "Turnos de la planta sintéticos (A5); la batería conoce el precio de la hora al decidir, "
+    "lo que hace el ahorro optimista (A4); no incluye el costo de la batería ni su degradación."
+)
+# Field meanings for the model only; the user never sees this text.
+FIELD_GUIDE = (
     "Precios en COP/kWh. charge_pct y discharge_pct = % de las horas de ese bloque (o nivel "
-    "de precio) en que la batería carga o descarga, no % de la energía total. "
-    "vs_best_rule = % de diferencia frente a la mejor regla fija; "
-    "vs_perfect_foresight = % del óptimo con previsión perfecta."
+    "de precio) en que la batería carga o descarga, no % de la energía total."
 )
 HOUR_LABELS = [f"{h:02d}-{h + 1:02d}" for h in range(0, 24, 2)]
 PRICE_LEVELS = ("Q1 (25% más barato)", "Q2", "Q3", "Q4 (25% más caro)")
-
-
-def _comparison_sentence(policy: str, mean: float, best_rule: str, best: float, optimum: float) -> str:
-    """Spanish sentence comparing ``policy`` with the best rule and the optimum."""
-    parts = []
-    if best:
-        diff = (mean - best) / abs(best) * 100
-        word = "más" if diff >= 0 else "menos"
-        parts.append(f"{policy} ahorra {abs(diff):.1f} % {word} que la mejor regla fija ({best_rule})")
-    if optimum:
-        parts.append(f"alcanza el {mean / optimum * 100:.1f} % del óptimo con previsión perfecta")
-    return " y ".join(parts) + "." if parts else ""
 
 
 @dataclass(frozen=True)
@@ -282,8 +271,6 @@ def _make_simulate(
             "best_rule": best_rule,
             "vs_best_rule": round((mean - best) / abs(best) * 100, 1) if best else 0.0,
             "vs_perfect_foresight": round(mean / optimum * 100, 1) if optimum else 0.0,
-            # Pre-written so the model can't flip the sign of the comparison (seen live).
-            "comparison": _comparison_sentence(policy, mean, best_rule, best, optimum),
             "energy": {
                 "bought_kwh": round(float(np.mean([r.summary.bought_kwh for r in runs]))),
                 "delivered_kwh": round(float(np.mean([r.summary.delivered_kwh for r in runs]))),
@@ -293,6 +280,7 @@ def _make_simulate(
             "by_price_level": by_level,
             "in_sample": policy == "q_learning" and start.month <= TRAIN_LAST_MONTH,
             "notes": NOTES,
+            "field_guide": FIELD_GUIDE,
         }
 
     return simulate_battery

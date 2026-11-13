@@ -1,7 +1,7 @@
 """Tests for `energy.agent.prompts`: the Spanish system prompt (step 5, D16).
 
 Only the agreed anchors are asserted (refusal phrase, citation format, data range,
-rules, table headers, source line), so the rest of the wording stays free. Run with
+rules, the no-tables rule), so the rest of the wording stays free. Run with
 ``uv run pytest tests/test_agent_prompts.py``.
 """
 from __future__ import annotations
@@ -31,10 +31,8 @@ def prompt() -> str:
         "2025-12-31",
         "detrás del medidor",
         "asesoría legal",
-        "Política | Ahorro promedio (COP)",
-        "Batería | Q-learning | Mejor regla | % del óptimo",
-        "Fuente: simulación propia con precios de bolsa de XM",
-        "Usa tablas solo para resultados de simulate_battery",
+        "No escribas tablas",
+        "el sistema agrega automáticamente",
         "search_regulation",
         "simulate_battery",
     ],

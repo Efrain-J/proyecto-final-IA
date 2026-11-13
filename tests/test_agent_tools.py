@@ -214,6 +214,11 @@ def test_simulate_battery_reports_expected_keys(sim):
     assert sim["notes"]
 
 
+def test_simulate_battery_has_no_prewritten_comparison(sim):
+    """The renderer writes the comparison; the model gets no ready-made figures (D16)."""
+    assert "comparison" not in sim
+
+
 def test_simulate_battery_defaults_policy_and_preset(registry):
     out = call(registry, "simulate_battery", start_date=START, end_date=END)
     assert out["policy"] == "q_learning"

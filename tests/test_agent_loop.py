@@ -18,6 +18,7 @@ from energy import config
 from energy.agent.llm import ChatReply, LLMError, ToolCall
 from energy.agent.loop import AgentResult, ToolCallRecord, open_agent, run_agent
 from energy.agent.prompts import REFUSAL, system_prompt
+from energy.agent.render import cop
 from energy.agent.tools import build_registry
 from energy.data.prices import load_prices
 from energy.rag.retrieve import Hit
@@ -74,6 +75,17 @@ class AlwaysToolCalls:
 
 def say(text: str) -> ChatReply:
     return ChatReply(text, [])
+
+
+START, END = "2025-10-06", "2025-10-19"  # two weeks of the test period
+HEADER = "| Política | Ahorro promedio (COP) |"
+COMPARISON_HEADER = "| Escenario | Ahorro promedio (COP) | Mejor regla (COP) | % del óptimo |"
+SOURCE_LINE = "*Fuente: simulación propia con precios de bolsa de XM, 2025.*"
+
+
+def ask_sim(id_: str = "s1", preset: str = "8h", policy: str = "q_learning") -> ToolCall:
+    args = {"start_date": START, "end_date": END, "preset": preset, "policy": policy}
+    return ToolCall(id_, "simulate_battery", json.dumps(args))
 
 
 def ask_search(id_: str = "c1", query: str = "eficiencia") -> ToolCall:
@@ -150,6 +162,122 @@ def test_two_tool_calls_in_one_reply_are_paired_by_id(registry):
     assert [m["tool_call_id"] for m in second if m["role"] == "tool"] == ["a", "b"]
     assert [r.arguments["query"] for r in result.tool_calls] == ["uno", "dos"]
     assert len(chat.calls) == 2
+
+
+# --- the deterministic results block (D16) -------------------------------------
+
+
+def test_simulation_block_comes_first_then_the_model_text(registry):
+    text = "La batería carga de noche y descarga de día."
+    chat = ScriptedChat([ChatReply(None, [ask_sim()]), say(text)])
+    result = run_agent("simula", [], registry, chat)
+    assert result.stopped == "answer"
+    assert len(result.simulations) == 1
+    assert result.model_text == text
+    assert result.results_block.startswith("**Ahorro promedio: ")
+    assert result.answer == result.results_block + "\n\n" + text
+    assert result.answer.startswith("**Ahorro promedio:")
+
+
+def test_block_numbers_equal_the_tool_output_exactly(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_sim()]), say("Explicación.")])
+    result = run_agent("simula", [], registry, chat)
+    mean = result.simulations[0]["savings_cop"]["mean"]
+    assert f"**Ahorro promedio: {cop(mean)} (" in result.results_block
+    assert HEADER in result.results_block
+    assert f"| Q-learning | {cop(mean).removesuffix(' COP')} |" in result.results_block
+    assert SOURCE_LINE in result.results_block
+
+
+def test_table_lines_are_stripped_from_the_model_text_when_a_block_exists(registry):
+    text = "Explicación inicial.\n| a | b |\n|---|---|\n| 1 | 2 |\nExplicación final."
+    chat = ScriptedChat([ChatReply(None, [ask_sim()]), say(text)])
+    result = run_agent("simula", [], registry, chat)
+    assert not any(ln.lstrip().startswith("|") for ln in result.model_text.splitlines())
+    assert "Explicación inicial." in result.model_text and "Explicación final." in result.model_text
+    assert result.answer.count(HEADER) == 1  # the block's table is the only one
+    assert "| a | b |" not in result.answer
+
+
+def test_without_a_simulation_there_is_no_block_and_answer_is_the_model_text(registry):
+    text = "Una tabla del modelo:\n| a | b |\n|---|---|"
+    chat = ScriptedChat([say(text)])
+    result = run_agent("hola", [], registry, chat)
+    assert result.results_block == ""
+    assert result.simulations == []
+    assert result.answer == result.model_text == text  # nothing is stripped without a block
+
+
+def test_failed_simulation_adds_no_block(registry):
+    bad = ToolCall("bad", "simulate_battery", json.dumps({"start_date": "2025-10-06"}))
+    chat = ScriptedChat([ChatReply(None, [bad]), say("No pude simular.")])
+    result = run_agent("simula", [], registry, chat)
+    assert result.simulations == []
+    assert result.results_block == ""
+    assert result.answer == "No pude simular."
+
+
+def test_two_different_simulations_give_the_comparison_table(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_sim("a", "4h"), ask_sim("b", "8h")]), say("Explicación.")])
+    result = run_agent("compara", [], registry, chat)
+    assert [s["preset"] for s in result.simulations] == ["4h", "8h"]
+    assert COMPARISON_HEADER in result.results_block
+    assert HEADER not in result.results_block
+    assert result.answer.startswith(result.results_block)
+    assert result.answer.endswith("Explicación.")
+
+
+def test_the_same_simulation_twice_gives_a_single_block(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_sim("a")]), ChatReply(None, [ask_sim("b")]), say("Listo.")])
+    result = run_agent("simula", [], registry, chat)
+    assert len(result.simulations) == 2  # every successful call is kept, in order
+    assert result.results_block.count("**Ahorro promedio:") == 1
+    assert HEADER in result.results_block
+    assert COMPARISON_HEADER not in result.results_block
+
+
+def test_llm_error_after_a_simulation_still_shows_the_block(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_sim()]), LLMError("caído")])
+    result = run_agent("simula eficiencia", [], registry, chat)
+    assert result.stopped == "llm_error"
+    assert result.results_block.startswith("**Ahorro promedio:")
+    assert result.answer.startswith(result.results_block)
+    assert "caído" in result.model_text or "No pude consultar" in result.model_text
+
+
+def test_citations_are_checked_on_the_model_text_with_a_block_present(registry):
+    text = f"Explicación. Eficiencia mínima [{CITA}]."
+    chat = ScriptedChat([ChatReply(None, [ask_search(), ask_sim()]), say(text)])
+    result = run_agent("q", [], registry, chat)
+    assert [norm(c) for c in result.citations] == [norm(CITA)]
+    assert result.unverified_citations == []
+    assert len(chat.calls) == 2  # no repair needed
+
+
+def test_repair_round_rewrites_only_the_model_text(registry):
+    fixed = f"Explicación con cita [{CITA}]."
+    chat = ScriptedChat([ChatReply(None, [ask_search(), ask_sim()]), say("Sin citas."), say(fixed)])
+    result = run_agent("q", [], registry, chat)
+    assert len(chat.calls) == 3
+    assert result.model_text == fixed
+    assert result.answer == result.results_block + "\n\n" + fixed
+    assert [norm(c) for c in result.citations] == [norm(CITA)]
+
+
+def test_t_max_answer_keeps_the_block(registry):
+    class SimThenLoop:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def __call__(self, messages, tools):
+            self.n += 1
+            if tools is None:
+                return ChatReply("Final.", [])
+            return ChatReply(None, [ask_sim(f"s{self.n}")])
+
+    result = run_agent("simula", [], registry, SimThenLoop(), t_max=1)
+    assert result.stopped == "t_max"
+    assert result.answer == result.results_block + "\n\n" + "Final."
 
 
 # --- errors and the T_max cap --------------------------------------------------
@@ -319,7 +447,7 @@ def test_real_groq_regulation_question_answers_with_a_valid_citation():
 
 
 @pytest.mark.network
-def test_real_groq_simulation_question_answers_with_the_agreed_table():
+def test_real_groq_simulation_question_answers_with_the_results_block():
     config.load_env()
     if not os.environ.get("GROQ_API_KEY"):
         pytest.skip("GROQ_API_KEY is not set")
@@ -330,5 +458,18 @@ def test_real_groq_simulation_question_answers_with_the_agreed_table():
     )
     assert result.stopped == "answer"
     assert any(call.name == "simulate_battery" and call.ok for call in result.tool_calls)
-    assert "Política | Ahorro promedio (COP)" in result.answer
-    assert "Fuente: simulación propia con precios de bolsa de XM" in result.answer
+    assert result.answer.startswith("**Ahorro promedio:")
+    assert HEADER in result.answer
+    assert SOURCE_LINE.split(",")[0] in result.answer  # year depends on the question
+    assert cop(result.simulations[0]["savings_cop"]["mean"]) in result.answer
+
+
+def test_model_never_sees_the_figures_shown_in_the_block(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_sim()]), say("Explicación.")])
+    result = run_agent("simula", [], registry, chat)
+    (tool_msg,) = [m for m in chat.calls[1][0] if m["role"] == "tool"]
+    observation = json.loads(tool_msg["content"])
+    for hidden in ("savings_cop", "baselines", "vs_best_rule", "vs_perfect_foresight", "energy"):
+        assert hidden not in observation
+    assert "by_hour_block" in observation and "best_rule" in observation
+    assert result.simulations[0]["savings_cop"]["mean"] > 0  # the block still has them
