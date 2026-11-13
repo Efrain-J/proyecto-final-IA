@@ -98,65 +98,68 @@ results/             Planned: metrics CSVs and plots (committed)
 
 | File | Contents |
 |---|---|
-| `artifacts/policies/q_d{1,2,4}h.npz` + `.json` | Q-table plus metadata: seed, episodes, training range, discretizer bin edges, battery duration. Committed (KB-sized). |
+| `artifacts/policies/q_{2,3,4}h_{2025,2024}.npz` + `.json` (2025 implemented) | One Q-table per preset and scenario (D9, D5), plus metadata: seed, episodes, training range, price-level bin edges, battery duration. Committed (KB-sized). |
 | `results/*.csv`, `results/*.png` | Part 1 metrics and the agent evaluation. Committed as evidence for the report. |
 
-## 5. Part 1 design (Planned)
+## 5. Part 1 design (Implemented)
 
 ```python
 # rl/battery.py
-class Action(IntEnum):
-    DISCHARGE = -1
+class Action(IntEnum):   # values index the Q-table directly
     IDLE = 0
     CHARGE = 1
+    DISCHARGE = 2
 
 @dataclass(frozen=True)
 class BatteryPreset:
-    id: str              # e.g. "2h-200kWh"; hashable key for caches and tool enums
+    id: str              # "2h" | "3h" | "4h"
     label: str
     capacity_kwh: float
     power_kw: float
-    efficiency: float    # round trip
-    soc0: float = 0.0    # initial state of charge, fraction
-
-    @property
-    def duration_h(self) -> float: ...
+    round_trip_efficiency: float = 0.9
+    # properties: duration_h (int), n_levels, one_way_efficiency; every battery starts empty
 
 PRESETS: dict[str, BatteryPreset]
 
-def step(soc: float, action: Action, p: BatteryPreset) -> tuple[float, float]:
-    """Return (next_soc, grid_kwh); grid_kwh > 0 means energy bought to charge."""
+def step(level: int, action: Action, preset: BatteryPreset) -> tuple[int, float]:
+    """Return (next_level, grid_kwh): +P/η when charging, −P·η when discharging.
+    An impossible action is treated as idle."""
+
+def transition_tables(preset) -> tuple[np.ndarray, np.ndarray]: ...  # built from step()
+def valid_mask(preset) -> np.ndarray: ...
 ```
 
 - **`step()` is the only implementation of the battery physics.** Q-learning, value iteration, the baselines and `simulate` all call it, so training and evaluation can't silently diverge. It must be tested (efficiency, SoC bounds).
-- **State:** hour, discretized SoC, and a **relative** price level (O7), because 2024 averaged almost three times 2025 (D5). The `Discretizer` fits its bin edges on training data only and is saved with the policy.
-- **Reward:** price × energy offset, with efficiency losses. No wear (A3), and every discharged kWh replaces a purchase (A2).
-- **Presets:** one Q-table per battery duration. Presets with the same duration share a policy and the savings scale with size (D9).
+- **State (D14):** an hour pair (12 values), the SoC level (0 to the battery's duration in hours; one full-power hour moves it one level), and a **relative** price level. The price level is the price ÷ the trailing 168-hour mean, in 4 bins. The `Discretizer` fits the quartile bin edges on training data only and is saved with the policy.
+- **Reward (D14, option A):** relative price × (kWh delivered − kWh bought), with √0.9 efficiency each way. No wear (A3), and every discharged kWh replaces a purchase (A2). `simulate` always reports COP.
+- **Episodes:** one week, starting empty, γ ≈ 0.99. Impossible actions are masked.
+- **Presets (D9):** 2 h, 3 h and 4 h at 100 kW, one Q-table per preset and scenario. Scenarios are 2025 and 2024, each training on January–September and testing on October–December (D5).
 
 ```python
 # rl/policies.py
-@dataclass(frozen=True)
-class Observation:
-    timestamp: pd.Timestamp
-    hour: int
-    price: float
-    price_level: float
-    soc: float
-
 class Policy(Protocol):
     name: str
-    def act(self, obs: Observation) -> Action: ...
+    def actions(self, frame: pd.DataFrame, preset: BatteryPreset) -> np.ndarray:
+        """One int8 action per row of frame (timestamp, price_cop_kwh, rel_price)."""
 ```
+
+`actions()` returns the whole sequence at once, replacing the planned per-hour `act(Observation)`. That makes replay fast, and lets perfect foresight see the whole period. Causal policies only look at row t to decide hour t.
+
+**Speed and size measures:**
+- Features are computed once, before the split.
+- The training loop runs over plain lists and the lookup tables from `transition_tables`, with the masks precomputed.
+- Training stops early after 20 passes with no change.
+- Q-tables are `float32` and stored compressed (`.npz` + `.json`, no pickle).
+- Jobs run in parallel processes, with order-independent seeds (`energy.rl.train`).
 
 Policies:
 - **`TabularPolicy`**, from Q-learning or value iteration.
 - **Baselines:**
   - `NoBattery`
-  - `NightDay`, a fixed schedule
-  - `Threshold`, a price rule
+  - `NightDay`, a fixed schedule: charge from 02:00 and discharge from 18:00, for as many hours as the battery's duration
   - `PerfectForesight`, a DP optimum over the actual prices. It isn't causal, but it gives the upper bound for the metric "% of optimum captured" (O3).
 
-## 6. `simulate()` contract (Planned)
+## 6. `simulate()` contract (Implemented)
 
 ```python
 @dataclass(frozen=True)
@@ -167,10 +170,10 @@ class SimulationSummary:
     end: date
     hours: int
     savings_cop: float
-    savings_pct_of_energy_cost: float
-    cycles: float
-    charged_kwh: float
-    discharged_kwh: float
+    bought_kwh: float
+    delivered_kwh: float
+    cycles: float          # delivered / (capacity × η)
+    invalid_actions: int   # turned into idle
 
 @dataclass(frozen=True)
 class SimulationResult:
@@ -179,10 +182,13 @@ class SimulationResult:
 
 def simulate(policy: str | Policy, start: date, end: date,
              preset: str | BatteryPreset,
-             prices: pd.DataFrame | None = None) -> SimulationResult: ...
+             prices: pd.DataFrame | None = None,
+             policies_dir: Path = DEFAULT_POLICIES_DIR) -> SimulationResult: ...
 ```
 
 - **Savings** are measured against the same hours with no battery.
+- `savings_pct_of_energy_cost` was dropped: under A2 we don't know the plant's total load.
+- The string id `q_learning` loads `q_<preset>_<start.year>`. If that file is missing, it logs a warning and uses `NightDay`.
 - `policy` and `preset` accept string ids, so Streamlit caching and the agent's tools can pass plain values.
 - Raises `ValueError` if the dates are outside the data or `start > end`. The tool layer turns that into an observation for the model.
 - **One function serves three users:** the Part 1 metric, the dashboard charts, and the agent tool. All three therefore report the same numbers.
@@ -298,7 +304,7 @@ def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
 | NVIDIA embeddings | Query-time embedding | `BM25Retriever` over the committed `chunks.jsonl` (no torch, no second index), chosen by `open_retriever()` | Implemented |
 | Qdrant | Opened once (the app will cache `open_retriever()`) | BM25 if opening fails (lock, missing index, version) | Implemented |
 | Groq | Ordered model list, one retry | Retrieval-only answer: the error plus the top passages with citations | Planned |
-| Q-table missing | Load from `artifacts/policies/` | `Threshold` baseline, with a visible warning | Planned |
+| Q-table missing | Load from `artifacts/policies/` | `NightDay` baseline, with a logged warning (the app should also show it) | Implemented |
 
 ## 12. Artifacts and reproducibility
 
@@ -309,7 +315,7 @@ def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
 | `data/corpus/clean/` | Yes | `uv run python -m energy.rag.clean` |
 | `data/corpus/chunks.jsonl` | Yes (planned) | `rag.chunk` |
 | `data/qdrant/` | **No** (D8) | `rag.index`; needs `NVIDIA_API_KEY` |
-| `artifacts/policies/` | Yes (planned) | `rl.train`, seeded |
+| `artifacts/policies/` | Yes | `uv run python -m energy.rl.train --scenarios 2025` (seeded, about 4 s) |
 | `results/` | Yes (planned) | `eval.part1`, `eval.agent` |
 
 Training uses a fixed seed that is recorded in the policy's `.json`. Before submission, test with a clean clone (`git clone` → `uv sync` → run) and **no** `.env`.
@@ -317,10 +323,10 @@ Training uses a fixed seed that is recorded in the policy's `.json`. Before subm
 ## 13. Testing
 
 - `uv run pytest` runs offline. HTTP is mocked with `httpx.MockTransport`. Tests that call real services are marked `network` and are skipped by default (`uv run pytest -m network` to run them).
-- **Implemented:** `tests/test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_clean.py`, `test_chunk.py`, `test_index.py`, `test_retrieve.py` (fake embedder + in-memory Qdrant).
+- **Implemented:**
+  - Data and RAG: `tests/test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_clean.py`, `test_chunk.py`, `test_index.py`, `test_retrieve.py` (fake embedder + in-memory Qdrant).
+  - Part 1: `test_prices.py`, `test_features.py`, `test_battery.py`, `test_policies.py`, `test_qlearning.py`, `test_simulate.py`, `test_train.py`. They use the `synthetic_prices` fixture, and check the `step()` invariants, hand-computed savings, determinism, and that 1 and 2 workers give the same results.
 - **Planned:**
-  - `step()` invariants (efficiency, SoC bounds)
-  - `simulate()` on a tiny synthetic price series
   - a check that an article's text is present in its chunk
   - agent loop tests with a scripted fake LLM (`T_max`, tool errors, citations)
 
@@ -342,7 +348,7 @@ def simulate(policy: str | Policy, start: date, end: date,
     kWh replaces a kWh bought at that hour's price.
 
     Args:
-        policy: Policy object or registry id (``"q_learning"``, ``"threshold"``...).
+        policy: Policy object or registry id (``"q_learning"``, ``"night_day"``...).
         start: First day, inclusive. Must lie inside the price snapshot.
         end: Last day, inclusive.
         preset: Battery preset or its id from ``PRESETS``.

@@ -12,7 +12,7 @@ Chosen scenario: **3.3 (battery dispatch with an MDP + regulation RAG assistant)
 - `docs/planned_steps.md`: the road map. When you finish a step or hit an obstacle, note it under that step.
 - `docs/architecture.md`: package map, dependency rules, interfaces (implemented vs. planned), fallbacks. New modules must follow it; log any change to an interface in `decisions.md`.
 
-Current state: the data layer (XM prices, corpus download) and RAG cleaning are implemented and tested. Part 1 (RL), `simulate`, chunking/indexing, the agent and the dashboard are not started yet. Update this file with the real commands as code is added.
+Current state: the data layer (XM prices, corpus download) and the full RAG pipeline (cleaning, chunking, Qdrant index, retrieval with BM25 fallback) are implemented and tested. Part 1 is implemented for the 2025 scenario: Q-learning, the baselines, `simulate` and parallel training (results in D14). The 2024 scenario, `eval/part1.py`, the agent and the dashboard are not started yet. Update this file with the real commands as code is added.
 
 ## Code documentation conventions
 
@@ -38,6 +38,9 @@ Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` an
 - `energy/rag/chunk.py`: clean → `data/corpus/chunks.jsonl` (committed). Splits by article/annex, each chunk labeled `article` = `"12"` / `"Anexo 1"` / null. Run with `uv run python -m energy.rag.chunk`.
 - `energy/rag/index.py`: chunks → Qdrant at `data/qdrant/` (gitignored) with NVIDIA embeddings. Needs `NVIDIA_API_KEY`, takes about 45 s. Run with `uv run python -m energy.rag.index`.
 - `energy/rag/retrieve.py`: `open_retriever()` returns Qdrant+NVIDIA, or BM25 over `chunks.jsonl` as fallback; `Hit.citation` gives the citation. Manual check: `uv run python -m energy.rag.retrieve "pregunta" [--bm25]`.
+- `energy/data/prices.py`: `load_prices()` and `scenario_split(frame, year)` (train January–September, test October–December, D5).
+- `energy/rl/`: Part 1 (D14). `battery.py` (presets, `step()`, the only battery physics), `features.py` (relative price, hour pairs, `Discretizer`), `policies.py` (`NoBattery`, `NightDay`, `PerfectForesight`), `qlearning.py` (`train_q_learning`, `TabularPolicy`), `simulate.py` (`simulate()`, used by the eval, the app and the agent).
+- `energy/rl/train.py`: `uv run python -m energy.rl.train --scenarios 2025 [--workers N]` trains one Q-table per preset in parallel and writes `artifacts/policies/q_<preset>_<year>.npz/.json` (committed). It prints the test savings against the baselines.
 - Full RAG rebuild order after changing the corpus: `energy.data.corpus` → `energy.rag.clean` → `energy.rag.chunk` → `energy.rag.index`.
 - `tests/`: pytest, with HTTP mocked through `httpx.MockTransport`.
 

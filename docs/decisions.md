@@ -43,10 +43,10 @@ We don't use IDEAM solar radiation and don't model solar panels. That removes on
 
 ## D5. Data window: hourly bolsa prices for 2024 and 2025, prices only
 
-**Status:** Decided (2026-11-12; updated from "one year")
+**Status:** Decided (2026-11-12; updated from "one year"; split changed 2026-11-13)
 
 - Hourly national bolsa price (`PrecBolsNaci`, entity `Sistema`, COP/kWh) for **2024-01-01 to 2025-12-31**: 17,544 hours, with no gaps. No demand data, since A2 makes it unnecessary.
-- **Split:** train on 2024, test on 2025.
+- **Split (changed 2026-11-13): two scenarios, each trained and tested within one year.** Train on January–September and test on October–December, split by date, so the agent is never tested on weeks it trained on. **Scenario 2025 comes first.** Scenario 2024 (the El Niño drought) repeats the same setup as a stress test. *Previously:* train on 2024 and test on 2025. We dropped that because it mixes two very different price regimes into a single test, and the within-year version gives each year its own result.
 - Snapshot: `data/processed/prices_hourly.csv` (`timestamp`, `price_cop_kwh`), with the raw monthly JSON in `data/raw/xm/`. Both are committed, which is the plan B if the API is down.
 
 **What the data shows:** the two years are very different, which matters for the MDP.
@@ -59,6 +59,14 @@ We don't use IDEAM solar radiation and don't model solar panels. That removes on
 **Validated (2026-11-12):** our daily averages match XM's official daily weighted price (`PPPrecBolsNaci`) within 1–5% for Sep–Nov 2024 and Apr 2025. The small gap is expected: XM weights by demand, while ours is a plain mean. The extremes are real. The top (≈2,500–2,676 COP/kWh, 2024-09-30 and late Oct to early Nov 2024) is the 2024 dry-season crisis. The bottom (≈96–110) is the price floor in wet periods. Runs of identical hourly prices are normal: generators submit one offer price per day. **We keep all values**; they are the risk the battery protects against.
 
 The average price is lowest around 00:00–04:00 and peaks at **18:00–20:00**; in 2025 the 19:00 average is 468 versus about 190 overnight. Because 2024 averages almost three times 2025, **price levels in the MDP state should be relative** (for example, the price compared with a recent rolling average or percentile), not absolute COP thresholds. Otherwise a policy trained on 2024 would see almost every 2025 hour as "low."
+
+**Hourly and weekly patterns (checked 2026-11-13, 2024–2025):**
+- Compared with each day's mean, the price is about 0.87× at 02:00–04:00 and 1.15–1.23× at 18:00–20:00.
+- 72% of days peak at 18:00 or 19:00.
+- On 78% of days the max/min spread exceeds 12%, which is enough to cover the round-trip losses.
+- The hour of day explains only about 29% of the variance within a day, so the state also needs a price level.
+- In 2025, compared with the surrounding week's mean, Saturdays are 0.88×, Sundays 0.83× and Wednesdays 1.08×.
+- 2025 monthly means range from 520 (January) down to 113 (June).
 
 ## D6. RAG corpus: CREG resolutions and XM documents about batteries and the market
 
@@ -86,16 +94,116 @@ The manifest also has `selector` (the CSS selector for the main content), `in_fo
 
 ## D9. Battery options are a fixed set of presets
 
-**Status:** Decided (2026-11-12), preset values and the training approach Open
+**Status:** Decided (2026-11-12; preset values and training approach decided 2026-11-13)
 
 The user picks the battery from a fixed list of presets (capacity kWh / power kW / efficiency), not free values. So every policy can be trained ahead of time, and the app never has to train while it runs.
+
+**Decided (2026-11-13):** three presets, all **100 kW with 90% round-trip efficiency** (√0.9 ≈ 94.9% each way):
+
+| Preset | Capacity | Duration | State-of-charge levels |
+|---|---|---|---|
+| 2 h | 200 kWh | 2 h | 3 (0, ½, full) |
+| 3 h | 300 kWh | 3 h | 4 |
+| 4 h | 400 kWh | 4 h | 5 |
+
+**One Q-table per preset.** Each preset has its own duration, so this is the same as one per duration.
+- **Why not one agent for all batteries:** in tabular Q-learning, adding the preset to the state just splits one table into separate parts that share nothing. The number of charge levels also differs per preset.
+- **Real sharing across batteries** would need function approximation (such as a neural network). That's more complex and harder to present as the team's own implementation (MVP).
+- **Cost:** training each table takes seconds.
+
+The options considered:
 
 How Q-learning covers the presets:
 
 - **Direct (recommended):** train one Q-table per preset offline, save them to disk, and have `simulate()` load the one matching the selected preset. It's simple and each preset gets its own exact policy.
 - **Indirect:** with wear ignored (A3), the reward is proportional to battery size. If we track the state of charge as a percentage, two batteries with the same **duration** (capacity ÷ power, the hours to empty at full power) and the same efficiency have the **same optimal policy**, and the savings just scale with size. For example, 200 kWh / 100 kW and 400 kWh / 200 kW are both 2-hour batteries. So we only need one Q-table per duration, and a preset adds a size multiplier.
 
-The two combine: define the presets as a few durations (e.g., 1 h, 2 h, 4 h) times a few sizes. Then there's one Q-table per duration, and showing it holds is a nice point for the report.
+The two combine: define the presets as a few durations times a few sizes. Then there's one Q-table per duration, and showing it holds is a nice point for the report. With one size per duration, as decided above, "direct" and "indirect" coincide. Other sizes could be added later by scaling the savings.
+
+## D14. Battery MDP and Q-learning setup
+
+**Status:** Decided (2026-11-13). Closes O1, O4 and O7.
+
+**Decision step:** one hour. The agent acts every hour.
+
+**State:** (hour block, state of charge, price level).
+- **Hour block:** the hour of day in **pairs**, 12 values (00–01, 02–03, …, 18–19, 20–21, 22–23). The agent still decides every hour; both hours of a pair share the same state, and the state of charge tells them apart. This halves the hour dimension, so each state is visited twice as often in training.
+  - Cost: 20:00, still a peak at 1.15×, is paired with 21:00 at 1.06×. The price level makes up for most of that.
+- **State of charge:** a discrete level from 0 to the battery's duration in hours (D9). One hour at full power moves it exactly one level.
+- **Price level (closes O7):** the current price divided by the mean of the **previous 168 hours** (7 days), grouped into **4 bins**. The cut points are the quartiles of that ratio in the training set. Being relative, the same table works whether prices average 676 (2024) or 113–520 (2025 months).
+  - A cheap weekend shows up as "cheap" relative to the week, so we add **no weekday flag** (see the weekly pattern in D5).
+  - The trailing window only uses past prices. The first week of a split takes its warm-up from the hours just before it (December 2024 for 2025). For January 2024, which has no earlier data, the mean is taken over the hours available so far.
+
+**Actions:** charge, idle, discharge, each at full power for one hour.
+- Impossible actions are masked rather than penalized: charging when full, or discharging when empty.
+
+**Transitions:** the state of charge moves one level per charge or discharge. Energy accounting, with power P = 100 kW and efficiency η = √0.9 each way:
+- Charging stores P × 1 h and **buys** P / η from the grid.
+- Discharging takes P × 1 h out of storage and **delivers** P × η to the plant.
+- Thanks to A2, every kWh delivered is a kWh the plant does not buy.
+
+**Reward, option A (decided): relative.**
+- r = (price ÷ trailing 168-hour mean) × (kWh delivered − kWh bought).
+- It matches the relative price state, and the drought's prices don't dominate what is learned.
+- **Results are always reported in COP:** `simulate` replays the policy with the real prices.
+
+**Option B (considered, not chosen):** reward in COP, r = price × (kWh delivered − kWh bought).
+- Simpler and literal.
+- But Q-values learned at one price level are off by about 3× at another (2024 vs. 2025), which makes them noisier, and it doesn't match the relative state. We keep this for the record. It could become an experiment if A behaves badly.
+
+**Episodes:** one **week** (168 hours), starting with the battery empty, discount γ ≈ 0.99.
+- The charge level carries over midnight, as in real operation, instead of an artificial reset every day.
+- The number of hours learned from is the same as with daily episodes.
+- Weekly episodes alone don't teach weekly patterns, because the state has no weekday. The relative price level covers most of that.
+
+**One Q-table per preset** (D9). The table is 12 × (3–5) × 4 states × 3 actions, at most 720 values.
+
+**Baselines (refines O3):**
+- **Do nothing:** zero savings.
+- **Fixed schedule:** charge 02:00–05:00, discharge 18:00–21:00, as many hours as the battery's duration allows.
+- **Perfect foresight:** the upper bound, knowing the week's prices in advance.
+
+Expectation, to state honestly in the report: the daily pattern is regular, so the fixed schedule will be strong. Q-learning should land between it and perfect foresight, gaining on unusual days such as a midday peak, or a flat day where cycling loses money.
+
+**Assumption A4: the current hour's price is known when deciding** (2026-11-13). In reality the bolsa price is settled after the fact, so a consumer doesn't know the exact price of the current hour. Assuming it is known keeps the state simple and strong. The alternative, using only the hour and yesterday's price level, is more realistic but has a weaker signal. A4 makes the savings optimistic and goes in the limitations.
+
+**Implementation settings (2026-11-13):**
+- **Learning rate:** α decays linearly from 0.1 to 0.02 over the passes. With a constant α, near-tied greedy actions kept flipping, and early stopping never triggered.
+- **Exploration:** ε decays linearly from 1.0 to 0.05.
+- **Passes:** at most 300 over the training weeks, with early stopping after 20 unchanged passes.
+- **Fixed schedule:** charge from 02:00 and discharge from 18:00, for `duration_h` hours each.
+- **Storage:** each Q-table is `float32`, written with `np.savez_compressed` plus a small `.json`, at 1.7–2.7 KB per preset. No pickle.
+- **Training runs:** the jobs (preset × year) run in parallel processes. Each job's seed depends only on (base seed, preset, year), so results are identical whatever the number of workers. Training takes 2.7 s per table; the three 2025 tables take 3.6 s in parallel versus 7.0 s one after another.
+
+**Results, scenario 2025 (2026-11-13; test October–December 2025, savings in COP):**
+
+| Preset | Q-learning | Fixed schedule | Perfect foresight | Q ÷ schedule | Q ÷ perfect |
+|---|---|---|---|---|---|
+| 2 h | 3.59 M | 3.74 M | 4.29 M | 96% | 84% |
+| 3 h | 4.51 M | 4.73 M | 5.43 M | 95% | 83% |
+| 4 h | 4.84 M | 5.01 M | 6.12 M | 97% | 79% |
+
+**Decided: report this as it is.** Q-learning comes close to the fixed schedule but stays below it. We checked that this isn't a bug:
+- It is also slightly below on the training months (0.99).
+- No variant beat the schedule (2 h battery, Q ÷ schedule on the test months):
+
+| Variant | Q ÷ schedule |
+|---|---|
+| D14 as decided | 0.97 |
+| Discount 0.999 | 0.88 |
+| Discount 1.0 | 0.82 |
+| All 24 hours instead of pairs | 0.92 |
+| Price compared with the last 24 h | 0.99 |
+| One-day episodes | 0.98 |
+| 1,000 passes | 0.99 |
+
+Why, for the report:
+- **The daily pattern is very regular**, so "charge at night, discharge at 18:00" is close to the best a non-foresighted policy can do. At 02:00 nothing in the state says how expensive this evening will be.
+- **Perfect foresight's extra savings come from knowing the future.**
+- **The schedule's hours were chosen from the 2024–2025 hourly profile**, which includes the test months, so it has a small information advantage.
+- **Q-learning found nearly the same rule on its own** from January–September, without being told the hours.
+
+The test on synthetic data checks Q-learning ≥ 90% of the fixed schedule. A threshold relative to perfect foresight was dropped: there, even the schedule only reaches 75–84%, because perfect foresight profits from the noise.
 
 ## D10. Call XM's API directly instead of `pydataxm`
 
@@ -158,13 +266,13 @@ Code documentation: Google-style docstrings, a module docstring for every module
 
 ## Open questions
 
-- **O1. MDP specification:** state discretization (hour, state of charge levels, price bins), action set (charge, idle, discharge), and reward (cost saved minus efficiency losses and degradation).
+- ~~**O1. MDP specification**~~: resolved in D14.
 - **O2. Solver:** leaning toward **Q-learning** (2026-11-12). It learns from the real price series without a price-transition model. Fall back to value iteration if Q-learning doesn't converge or its results are unstable. Both use the same data.
-- **O3. Baselines:** naive (no battery, or a fixed night-charge / evening-discharge schedule) and reference (price-threshold rule or perfect-foresight optimum).
-- **O4. Battery presets** (see D9): which capacity / power / efficiency combinations to offer, and the initial state of charge. They should be realistic for a commercial or industrial site and consistent with A2 (the site's load stays above the battery's power).
-- ~~**O5. Year and split**~~: resolved in D5 (2024 + 2025, train on 2024, test on 2025).
+- ~~**O3. Baselines**~~: resolved in D14 (do nothing, the fixed schedule and perfect foresight), with the results for 2025.
+- ~~**O4. Battery presets**~~: resolved in D9 (2 h, 3 h and 4 h at 100 kW, 90% round trip, starting empty).
+- ~~**O5. Year and split**~~: resolved in D5 (changed 2026-11-13: within-year scenarios, train January–September and test October–December, 2025 first).
 - **O6. RAG document list** (see D6): a first version is downloaded. Revisit after reading the documents, especially for behind-the-meter batteries.
-- **O7. Price state definition:** a relative price level instead of absolute COP thresholds, because of the gap between 2024 and 2025 (see D5).
+- ~~**O7. Price state definition**~~: resolved in D14 (price ÷ the trailing 168-hour mean, 4 quartile bins).
 - **O8. To do: `energy/config.py` + root-anchored paths** (deferred 2026-11-12). Today every command must run from the repo root, because the path defaults are relative (`data/...`). Do it when the first module runs from somewhere else (a notebook, the eval, the app) or needs shared settings (model names, `T_max`, thresholds). How:
   - build every path from `Path(__file__).resolve().parents[1]`
   - load `.env` only in entry points, never on import, so tests don't pick up real keys
@@ -172,7 +280,12 @@ Code documentation: Google-style docstrings, a module docstring for every module
   - keep the CLI flags
 
   Trade-off: it's global state that every module depends on, and it changes working code. That's why we're waiting until it's needed.
-- **O9. To do: `energy/data/prices.py`** (`load_prices()` + train/test split; deferred 2026-11-12). Do it as the first step of Part 1, after O7. If the relative price level uses a rolling window, the 2025 test set needs the end of 2024 as warm-up, so a plain calendar-year split could be wrong. Until then, nothing reads the CSV.
+- ~~**O9**~~: done (2026-11-13), `energy/data/prices.py`. The original note follows.
+- **O9. To do: `energy/data/prices.py`** (`load_prices()` + train/test split; deferred 2026-11-12). This is the first step of Part 1, and O7 is now defined (D14). It should provide:
+- the within-year split by date (D5)
+- the trailing 168-hour mean, computed over the **whole** series before splitting, so each split gets its warm-up from the hours just before it
+
+Until then, nothing reads the CSV.
 
 ## Known limitations (for the README and report)
 
@@ -181,4 +294,7 @@ Code documentation: Google-style docstrings, a module docstring for every module
 - No network charges, taxes or capacity payments in the cost; only the energy price.
 - Battery wear is ignored (A3), so the savings are optimistic and the policy may cycle more than a real operator would.
 - Only the fixed battery presets are supported (D9).
+- The agent knows the current hour's price when deciding (A4), but the real bolsa price is settled after the fact, so the savings are optimistic.
+- Each scenario is tested on only three months (October–December) of one year (D5).
+- On 2025, Q-learning earns 95–97% of a simple fixed schedule. With such a regular daily price pattern, learning adds little over a well-chosen rule (D14).
 - This is an academic prototype, not financial, legal or regulatory advice.

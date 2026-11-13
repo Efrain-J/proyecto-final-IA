@@ -187,3 +187,34 @@ def sample_chunks(make_chunk):
             text="El precio de bolsa se determina cada hora según la oferta de generadores.",
         ),
     ]
+
+
+# --- Part 1 (RL) fixtures: synthetic hourly prices ---
+
+
+@pytest.fixture(scope="session")
+def synthetic_prices():
+    """Factory: make(weeks, start="2025-01-06", noise=0.0, seed=0) -> DataFrame.
+
+    Hourly `timestamp` (naive datetime64) and `price_cop_kwh`. Base price 200 COP/kWh,
+    x0.8 at hours 02-05, x1.3 at hours 18-21, flat otherwise; `noise` is the std of a
+    seeded multiplicative Gaussian perturbation. Session-scoped because it is a pure
+    factory, so module-scoped fixtures can use it.
+    """
+    import numpy as np
+    import pandas as pd
+
+    def make(weeks: int, start: str = "2025-01-06", noise: float = 0.0, seed: int = 0):
+        n = weeks * 168
+        ts = pd.date_range(start, periods=n, freq="h")
+        hours = ts.hour.to_numpy()
+        mult = np.ones(n)
+        mult[(hours >= 2) & (hours <= 5)] = 0.8
+        mult[(hours >= 18) & (hours <= 21)] = 1.3
+        price = 200.0 * mult
+        if noise:
+            rng = np.random.default_rng(seed)
+            price = price * (1.0 + rng.normal(0.0, noise, n))
+        return pd.DataFrame({"timestamp": ts, "price_cop_kwh": price})
+
+    return make
