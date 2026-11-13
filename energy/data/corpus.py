@@ -27,6 +27,9 @@ class Source:
     publisher: str
     url: str
     format: str
+    selector: str = ""
+    in_force: bool = True
+    superseded_by: str = ""
 
 
 @dataclass
@@ -36,6 +39,20 @@ class DownloadSummary:
     downloaded: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
+
+
+_TRUE = {"yes", "true"}
+_FALSE = {"no", "false"}
+
+
+def _parse_in_force(value: str, source_id: str) -> bool:
+    """Parse a yes/no/true/false cell; empty means in force."""
+    text = value.strip().lower()
+    if not text or text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise ValueError(f"Invalid in_force {value!r} for {source_id}")
 
 
 def load_manifest(path: Path) -> list[Source]:
@@ -48,7 +65,12 @@ def load_manifest(path: Path) -> list[Source]:
         sources: list[Source] = []
         seen: set[str] = set()
         for row in reader:
-            source = Source(*(row[c].strip() for c in REQUIRED_COLUMNS))
+            source = Source(
+                *(row[c].strip() for c in REQUIRED_COLUMNS),
+                selector=(row.get("selector") or "").strip(),
+                in_force=_parse_in_force(row.get("in_force") or "", row["id"].strip()),
+                superseded_by=(row.get("superseded_by") or "").strip(),
+            )
             if source.id in seen:
                 raise ValueError(f"Duplicate id in manifest: {source.id}")
             if source.format not in VALID_FORMATS:

@@ -225,3 +225,61 @@ def test_main_returns_nonzero_when_a_download_failed(tmp_path, monkeypatch):
 def test_main_returns_zero_when_everything_succeeds(tmp_path, monkeypatch):
     argv = _setup_main(tmp_path, monkeypatch, failed={})
     assert corpus.main(argv) == 0
+
+
+# ------------------------------------------- manifest: selector / in_force / superseded_by
+EXT_HEADER = "id,title,publisher,url,format,selector,in_force,superseded_by,notes\n"
+
+
+def test_load_manifest_parses_new_columns(tmp_path):
+    m = write_manifest(
+        tmp_path / "s.csv",
+        ["a,T,CREG,https://x.test/a.html,html,div.panel-documento,no,CREG 101 113 de 2026,n"],
+        header=EXT_HEADER,
+    )
+    (src,) = load_manifest(m)
+    assert src.selector == "div.panel-documento"
+    assert src.in_force is False
+    assert src.superseded_by == "CREG 101 113 de 2026"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("yes", True), ("YES", True), ("Yes", True), ("true", True), ("True", True),
+        ("TRUE", True), ("no", False), ("NO", False), ("No", False), ("false", False),
+        ("False", False), ("FALSE", False), ("", True),
+    ],
+)
+def test_load_manifest_in_force_values(tmp_path, raw, expected):
+    m = write_manifest(
+        tmp_path / "s.csv",
+        [f"a,T,P,https://x.test/a.html,html,,{raw},,"],
+        header=EXT_HEADER,
+    )
+    (src,) = load_manifest(m)
+    assert src.in_force is expected
+
+
+@pytest.mark.parametrize("bad", ["maybe", "1", "si"])
+def test_load_manifest_bad_in_force_raises(tmp_path, bad):
+    m = write_manifest(
+        tmp_path / "s.csv",
+        [f"a,T,P,https://x.test/a.html,html,,{bad},,"],
+        header=EXT_HEADER,
+    )
+    with pytest.raises(ValueError):
+        load_manifest(m)
+
+
+def test_load_manifest_without_new_columns_gets_defaults(tmp_path):
+    m = write_manifest(tmp_path / "s.csv", ["a,T,P,https://x.test/a.html,html,note"])
+    (src,) = load_manifest(m)
+    assert (src.selector, src.in_force, src.superseded_by) == ("", True, "")
+
+
+def test_source_five_positional_fields_have_defaults():
+    src = Source("a", "T", "P", "https://x.test", "html")
+    assert src.selector == ""
+    assert src.in_force is True
+    assert src.superseded_by == ""

@@ -1,7 +1,8 @@
-id,title,publisher,url,format,notes
-creg_101113_2026,Resolución CREG 101 113 de 2026 — Sistemas de almacenamiento de energía con baterías (SAEB),CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_101-113_2026.htm,html,current SAEB rule
-creg_098_2019,Resolución CREG 098 de 2019 — SAEB (marco anterior),CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_0098_2019.htm,html,previous SAEB framework
-creg_174_2021,Resolución CREG 174 de 2021 — Autogeneración a pequeña escala y generación distribuida,CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_0174_2021.htm,html,
-xm_glosario,Glosario de términos XM,XM,https://www.xm.com.co/herramientas/glosario-xm,html,
-xm_faq,Preguntas frecuentes XM,XM,https://www.xm.com.co/herramientas/preguntas-frecuentes,html,
-xm_paper52_precios,XM Paper N°52 — Análisis de los altos precios en el Mercado de Energía Mayorista colombiano,XM,"https://www.xm.com.co/sites/default/files/documents/Paper%20N%C2%B052_An%C3%A1lisis%20de%20los%20altos%20precios%20en%20el%20Mercado%20de%20Energ%C3%ADa%20Mayorista%20colombiano%20causas,%20consecuencias%20y%20estrategias%20regulatorias.pdf",pdf,
+id,title,publisher,url,format,selector,in_force,superseded_by,notes
+creg_101113_2026,Resolución CREG 101 113 de 2026 — Sistemas de almacenamiento de energía con baterías (SAEB),CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_101-113_2026.htm,html,div.panel-documento,yes,,current SAEB rule
+creg_098_2019,Resolución CREG 098 de 2019 — SAEB (marco anterior),CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_0098_2019.htm,html,div.panel-documento,no,CREG 101 113 de 2026,previous SAEB framework
+creg_174_2021,Resolución CREG 174 de 2021 — Autogeneración a pequeña escala y generación distribuida,CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_0174_2021.htm,html,div.panel-documento,yes,,
+xm_glosario,Glosario de términos XM,XM,https://www.xm.com.co/herramientas/glosario-xm,html,#block-xm-content,yes,,
+xm_faq,Preguntas frecuentes XM,XM,https://www.xm.com.co/herramientas/preguntas-frecuentes,html,#block-xm-content,yes,,
+xm_paper52_precios,XM Paper N°52 — Análisis de los altos precios en el Mercado de Energía Mayorista colombiano,XM,"https://www.xm.com.co/sites/default/files/documents/Paper%20N%C2%B052_An%C3%A1lisis%20de%20los%20altos%20precios%20en%20el%20Mercado%20de%20Energ%C3%ADa%20Mayorista%20colombiano%20causas,%20consecuencias%20y%20estrategias%20regulatorias.pdf",pdf,,yes,,
+creg_131_1998,Resolución CREG 131 de 1998 — Usuarios no regulados (límites de potencia y energía),CREG,https://gestornormativo.creg.gov.co/gestor/entorno/docs/resolucion_creg_0131_1998.htm,html,div.panel-documento,yes,,modificada por CREG 183 de 2009 y 038 de 2010

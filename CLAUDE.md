@@ -23,7 +23,8 @@ Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` an
 
 - `energy/data/io.py`: atomic file writes.
 - `energy/data/xm_prices.py`: XM bolsa prices through the XM API called directly (`pydataxm` is incompatible with pandas 3). `uv run python -m energy.data.xm_prices` writes `data/raw/xm/*.json` and `data/processed/prices_hourly.csv`. It's resumable; `--force` re-downloads.
-- `energy/data/corpus.py`: RAG documents listed in `data/corpus/sources.csv`. `uv run python -m energy.data.corpus` writes to `data/corpus/raw/`.
+- `energy/data/corpus.py`: RAG documents listed in `data/corpus/sources.csv`. `uv run python -m energy.data.corpus` writes to `data/corpus/raw/`. The manifest columns `selector`, `in_force` and `superseded_by` drive the cleaning and the citations.
+- `energy/rag/clean.py`: raw → `data/corpus/clean/<id>.md` (main-content selector, links stripped, `## ARTÍCULO n.` headings for CREG articles in ascending order only). Run with `uv run python -m energy.rag.clean`, after adding or changing a document.
 - `tests/`: pytest, with HTTP mocked through `httpx.MockTransport`.
 
 ## Guiding principle: MVP first
