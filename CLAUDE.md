@@ -4,11 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Final project for EAFIT SI3003 (Inteligencia Artificial), 2026. The full assignment is in `EAFIT_Proyecto_Final_IA.md` (Spanish); it is the source of truth for requirements and grading. **Hard deadline: Monday 2026-11-16** (moved from Friday 2026-11-13; confirm the exact hour)
+Final project for EAFIT SI3003 (Inteligencia Artificial), 2026. The full assignment is in `EAFIT_Proyecto_Final_IA.md` (Spanish); it is the source of truth for requirements and grading. **Hard deadline: Monday 2026-11-16** (moved from Friday 2026-11-13; confirm the exact hour). Code freeze, README, agent evaluation and AI-use declaration are all due then.
 
-Chosen scenario: **3.3 (battery dispatch with an MDP + regulation RAG assistant)**. Scope decisions, assumptions and open questions are logged in `docs/decisions.md`. Read it before planning work, and add new decisions there. The road map is in `docs/planned_steps.md`: when you finish a step or hit an obstacle, note it under that step. — code freeze, README, agent evaluation and AI-use declaration all due then.
+Chosen scenario: **3.3 (battery dispatch with an MDP + regulation RAG assistant)**. Three docs to read before planning work:
 
-The repo currently has no code. As the code is written, update this file with the real build/run/test commands and the architecture.
+- `docs/decisions.md`: scope decisions, assumptions and open questions. Add new decisions there.
+- `docs/planned_steps.md`: the road map. When you finish a step or hit an obstacle, note it under that step.
+- `docs/architecture.md`: package map, dependency rules, interfaces (implemented vs. planned), fallbacks. New modules must follow it; log any change to an interface in `decisions.md`.
+
+Current state: the data layer (XM prices, corpus download) and RAG cleaning are implemented and tested. Part 1 (RL), `simulate`, chunking/indexing, the agent and the dashboard are not started yet. Update this file with the real commands as code is added.
+
+## Code documentation conventions
+
+- **Google-style docstrings.** Every module gets a docstring: what it does, how to run it, its inputs/outputs. Public functions and classes get a summary line plus `Args`/`Returns`/`Raises` when they aren't obvious. Types come from the type hints, so `Args` describes meaning and units only.
+- Type hints on every public signature. Use dataclasses for anything that crosses a layer boundary.
+- Comments explain *why*, not *what*. Point to decision IDs instead of repeating the reasoning (`# one month per request, see D10`).
 
 ## Environment
 
@@ -71,10 +81,10 @@ Chosen to reuse two proven-working reference projects next to this repo (read th
 | Dashboard | **Streamlit** (`streamlit run app.py`) | Patterns from `llm_lab_ia`: sidebar for parameters, `st.tabs`, `@st.cache_resource` for clients/vector store, `st.write_stream` for streaming, catch SDK errors and show `st.error` instead of crashing. |
 | LLM + tool calling | **Groq SDK** (`groq`), OpenAI-style `chat.completions` with `tools` | Manual agent loop with `T_max` cap; tool errors go back to the model as observations. Default to an `openai/gpt-oss-*` model. Key in `GROQ_API_KEY` (env / `.env`). |
 | Vector store | **Qdrant** (`qdrant-client`, `langchain-qdrant`) | **Persist to disk** with `QdrantClient(path="data/qdrant")` — never `:memory:` in the app. Build the index once with a separate script; the app only opens it. Probe the embedding dim at runtime, cosine distance. |
-| Embeddings | NVIDIA NIM `nvidia/nemotron-3-embed-1b` via `langchain-nvidia-ai-endpoints` (`truncate="END"`) | Proven in the workshop. Key in `NVIDIA_API_KEY`. Fallback if it becomes a problem: local `sentence-transformers` (requires rebuilding the index). |
-| Document loading | `markitdown[pdf]` | |
-| Chunking | `RecursiveCharacterTextSplitter`, ~900 chars / 120 overlap, drop chunks < 30 chars | Metadata per chunk: `title`, `source` (filename), `chunk_index` — used for citations. |
+| Embeddings | NVIDIA NIM `nvidia/nemotron-3-embed-1b` via `langchain-nvidia-ai-endpoints` (`truncate="END"`) | Proven in the workshop. Key in `NVIDIA_API_KEY`, needed at build time **and** query time. Planned fallback: BM25 over the committed `chunks.jsonl` (see `docs/architecture.md`), not sentence-transformers. |
+| Document loading | `markitdown[pdf]` + BeautifulSoup main-content selectors (`energy/rag/clean.py`) | |
+| Chunking | CREG: split by `## ARTÍCULO n.` heading, keeping the heading in the chunk text. Others: `RecursiveCharacterTextSplitter`, ~900 chars / 120 overlap, drop chunks < 30 chars | Metadata per chunk: `title`, `source` (doc id), `chunk_index`, `article`, `in_force`, `superseded_by`. Used for citations. |
 | Retrieval | `similarity_score_threshold`, k≈5, threshold ≈0.25 | Thresholds tuned for the nemotron embedder in the workshop. |
 | Citation prompt | Answer only from context, cite `[title \| source]`, fixed refusal phrase when context is insufficient | From the workshop; makes trap questions in the eval pass. |
 
-API keys live in `.env` (must be gitignored) — never commit them.
+API keys live in `.env` (gitignored); never commit them. `.env.example` lists the keys with no values.

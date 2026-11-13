@@ -1,4 +1,21 @@
-"""Turn the raw corpus (HTML/PDF) into clean Markdown ready for chunking."""
+"""Turn the raw corpus (HTML/PDF) into clean Markdown ready for chunking.
+
+For HTML: keep only the main content node (the manifest's ``selector``, which
+drops the site menus), convert it to Markdown with markitdown, reduce links to
+their text, normalize whitespace, and mark CREG article headings. PDFs skip
+the selector step. See D11 for the reasoning.
+
+Run from the repo root, after adding or changing a document::
+
+    uv run python -m energy.rag.clean
+
+Inputs:
+    ``data/corpus/sources.csv`` and ``data/corpus/raw/<id>.<format>``.
+
+Outputs:
+    ``data/corpus/clean/<id>.md`` (committed, so anyone can read exactly what
+    the agent can retrieve). Always regenerated: the step is cheap and deterministic.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +49,13 @@ class CleaningError(ValueError):
 
 @dataclass(frozen=True)
 class CleanResult:
-    """Outcome of cleaning one document."""
+    """Outcome of cleaning one document.
+
+    Attributes:
+        id: Manifest id of the document.
+        chars: Length of the clean Markdown text.
+        articles: Number of ``## ARTÍCULO`` headings marked (0 for non-CREG).
+    """
 
     id: str
     chars: int
@@ -40,7 +63,22 @@ class CleanResult:
 
 
 def extract_main_html(html: bytes, selector: str) -> str:
-    """Return the HTML of the first node matching ``selector``."""
+    """Return the HTML of the first node matching ``selector``.
+
+    Fails loudly rather than falling back to the whole page, because the whole
+    page would put site menus into the index.
+
+    Args:
+        html: Raw page bytes. BeautifulSoup detects the encoding; the CREG
+            pages are ISO-8859-1.
+        selector: CSS selector, e.g. ``div.panel-documento`` or ``#block-xm-content``.
+
+    Returns:
+        The matched node serialized as HTML (a Unicode string).
+
+    Raises:
+        CleaningError: If nothing matches ``selector``.
+    """
     soup = BeautifulSoup(html, "html.parser")
     node = soup.select_one(selector)
     if node is None:
@@ -49,7 +87,15 @@ def extract_main_html(html: bytes, selector: str) -> str:
 
 
 def to_markdown(data: bytes, extension: str) -> str:
-    """Convert raw bytes to Markdown with markitdown."""
+    """Convert raw bytes to Markdown with markitdown.
+
+    Args:
+        data: Document bytes (UTF-8 for HTML coming from ``extract_main_html``).
+        extension: ``".html"`` or ``".pdf"``; the leading dot is optional.
+
+    Returns:
+        The converted Markdown text.
+    """
     from markitdown import MarkItDown, StreamInfo
 
     ext = extension if extension.startswith(".") else f".{extension}"
@@ -58,12 +104,21 @@ def to_markdown(data: bytes, extension: str) -> str:
 
 
 def strip_links(md: str) -> str:
-    """Drop images and replace ``[text](url)`` with ``text``."""
+    """Drop images and replace ``[text](url)`` with ``text``.
+
+    CREG pages link every cited law (``[142](ley_0142_1994.htm#0)``); the URLs
+    are noise for retrieval, so only the visible text is kept.
+    """
     return _LINK.sub(r"\1", _IMAGE.sub("", md))
 
 
 def normalize(md: str) -> str:
-    """Remove zero-width characters, trailing spaces and extra blank lines."""
+    """Remove zero-width characters, trailing spaces and extra blank lines.
+
+    Zero-width characters appear inside words on the XM pages ("frecu\\u200bentes")
+    and would break keyword matching. Runs of 3+ newlines collapse to one
+    blank line, and the whole text is stripped.
+    """
     md = _ZERO_WIDTH.sub("", md)
     md = "\n".join(line.rstrip() for line in md.split("\n"))
     md = re.sub(r"\n{3,}", "\n\n", md)
@@ -93,7 +148,18 @@ def mark_articles(md: str) -> str:
 
 
 def clean_document(source: Source, raw_path: Path) -> str:
-    """Clean one raw document into Markdown text."""
+    """Clean one raw document into Markdown text.
+
+    Args:
+        source: Manifest entry; ``format`` picks the pipeline and HTML needs a ``selector``.
+        raw_path: The downloaded file.
+
+    Returns:
+        Clean Markdown. Article headings are marked for HTML (CREG) documents only.
+
+    Raises:
+        CleaningError: If an HTML source has no selector or the selector matches nothing.
+    """
     data = Path(raw_path).read_bytes()
     if source.format == "html":
         if not source.selector:
@@ -107,7 +173,17 @@ def clean_document(source: Source, raw_path: Path) -> str:
 def clean_corpus(
     sources: list[Source], raw_dir: Path, clean_dir: Path
 ) -> tuple[list[CleanResult], dict[str, str]]:
-    """Clean every source; failures are recorded and processing continues."""
+    """Clean every source; failures are recorded and processing continues.
+
+    Args:
+        sources: Documents from the manifest.
+        raw_dir: Folder with the downloaded files.
+        clean_dir: Destination for ``<id>.md`` (written atomically, UTF-8).
+
+    Returns:
+        A ``CleanResult`` for each document written, and a dict mapping the id
+        of each failed document to its error message.
+    """
     results: list[CleanResult] = []
     failures: dict[str, str] = {}
     for source in sources:
@@ -125,7 +201,11 @@ def clean_corpus(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point: regenerate the clean corpus."""
+    """CLI entry point: regenerate the clean corpus and print per-document stats.
+
+    Returns:
+        ``0`` if every document was cleaned, ``1`` if any failed.
+    """
     parser = argparse.ArgumentParser(description="Clean the RAG corpus.")
     parser.add_argument("--manifest", type=Path, default=Path("data/corpus/sources.csv"))
     parser.add_argument("--raw-dir", type=Path, default=Path("data/corpus/raw"))

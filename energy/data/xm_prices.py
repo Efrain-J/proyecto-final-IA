@@ -1,4 +1,19 @@
-"""Download hourly Colombian bolsa prices (PrecBolsNaci) from the XM API."""
+"""Download hourly Colombian bolsa prices (``PrecBolsNaci``) from the XM API.
+
+Calls XM's public API directly (``POST servapibi.xm.com.co/hourly``) instead of
+``pydataxm``, which breaks with pandas 3 (see D10). One request per calendar
+month, because the API rejects ranges longer than about 31 days.
+
+Run from the repo root::
+
+    uv run python -m energy.data.xm_prices [--start 2024-01-01] [--end 2025-12-31] [--force]
+
+Outputs:
+    ``data/raw/xm/PrecBolsNaci_YYYY-MM.json``: raw payload, one per month
+    (resumable: existing months are skipped).
+    ``data/processed/prices_hourly.csv``: ``timestamp`` (naive Colombian local
+    time, start of hour) and ``price_cop_kwh``.
+"""
 
 from __future__ import annotations
 
@@ -34,7 +49,20 @@ class XMDownloadError(RuntimeError):
 
 
 def month_ranges(start: date, end: date) -> list[tuple[date, date]]:
-    """Split ``[start, end]`` into inclusive calendar-month chunks."""
+    """Split ``[start, end]`` into inclusive calendar-month chunks.
+
+    The first and last chunks are clipped to ``start`` and ``end``.
+
+    Args:
+        start: First day, inclusive.
+        end: Last day, inclusive.
+
+    Returns:
+        ``(chunk_start, chunk_end)`` pairs in chronological order.
+
+    Raises:
+        ValueError: If ``start`` is after ``end``.
+    """
     if start > end:
         raise ValueError(f"start {start} is after end {end}")
     ranges: list[tuple[date, date]] = []
@@ -48,7 +76,15 @@ def month_ranges(start: date, end: date) -> list[tuple[date, date]]:
 
 
 def build_request_body(start: date, end: date) -> dict[str, Any]:
-    """Build the JSON body for the XM hourly endpoint."""
+    """Build the JSON body for the XM hourly endpoint.
+
+    Args:
+        start: First day, inclusive.
+        end: Last day, inclusive. Keep the range within one month (D10).
+
+    Returns:
+        The request body for the national bolsa price (entity ``Sistema``).
+    """
     return {
         "MetricId": METRIC_ID,
         "StartDate": start.isoformat(),
@@ -59,6 +95,7 @@ def build_request_body(start: date, end: date) -> dict[str, Any]:
 
 
 def _to_float(value: Any) -> float:
+    """Parse an XM price string; missing or unparsable values become NaN."""
     if value is None or value == "":
         return float("nan")
     try:
@@ -68,7 +105,21 @@ def _to_float(value: Any) -> float:
 
 
 def parse_hourly_items(payload: dict[str, Any]) -> pd.DataFrame:
-    """Convert an XM hourly payload into a ``timestamp``/``price_cop_kwh`` frame."""
+    """Convert an XM hourly payload into a ``timestamp``/``price_cop_kwh`` frame.
+
+    ``HourNN`` maps to ``Date + (NN - 1)`` hours, so ``Hour01`` is 00:00.
+    Colombia has no daylight saving time, so every day has exactly 24 hours.
+
+    Args:
+        payload: Parsed JSON from the API, with ``Items[].Date`` and
+            ``Items[].HourlyEntities[0].Values.Hour01..Hour24`` (strings, COP/kWh).
+
+    Returns:
+        One row per hour, sorted by timestamp. Missing or empty values are NaN.
+
+    Raises:
+        XMResponseError: If ``Items`` is missing or an item is malformed.
+    """
     items = payload.get("Items") if isinstance(payload, dict) else None
     if not isinstance(items, list):
         raise XMResponseError("Payload has no 'Items' list")
@@ -92,7 +143,7 @@ def parse_hourly_items(payload: dict[str, Any]) -> pd.DataFrame:
 
 
 def raw_month_path(raw_dir: Path, year: int, month: int) -> Path:
-    """Path of the raw JSON file for a given month."""
+    """Path of the raw JSON file for a given month (``PrecBolsNaci_YYYY-MM.json``)."""
     return Path(raw_dir) / f"{METRIC_ID}_{year:04d}-{month:02d}.json"
 
 
@@ -137,6 +188,7 @@ async def _download_all(
     backoff_base: float,
     transport: httpx.AsyncBaseTransport | None,
 ) -> list[Path]:
+    """Async body of ``download_months``: fetch the missing months concurrently."""
     sem = asyncio.Semaphore(concurrency)
     todo: list[tuple[date, date, Path]] = []
     paths: list[Path] = []
@@ -184,8 +236,28 @@ def download_months(
 ) -> list[Path]:
     """Download one raw JSON file per calendar month in ``[start, end]``.
 
-    Existing files are skipped unless ``force``. Every month is attempted;
-    ``XMDownloadError`` is raised afterwards if any failed.
+    Months run concurrently (at most ``concurrency`` at a time) and each is
+    retried with exponential backoff. Every month is attempted before any
+    error is raised, so one bad month doesn't block the others.
+
+    Args:
+        start: First day, inclusive.
+        end: Last day, inclusive.
+        raw_dir: Folder for the monthly JSON files.
+        force: Re-download months whose file already exists.
+        concurrency: Maximum simultaneous requests.
+        retries: Attempts per month.
+        timeout: Per-request timeout, in seconds.
+        backoff_base: Seconds before the first retry; doubles each attempt.
+            ``0`` disables sleeping (used in tests).
+        transport: Optional ``httpx`` transport; tests pass a ``MockTransport``.
+
+    Returns:
+        Sorted paths of the month files for the range, both downloaded and skipped.
+
+    Raises:
+        XMDownloadError: If any month failed after all retries; ``.failed``
+            maps ``"YYYY-MM"`` to the last error.
     """
     return asyncio.run(
         _download_all(
@@ -196,7 +268,19 @@ def download_months(
 
 
 def build_prices_csv(raw_dir: Path, out_csv: Path, start: date, end: date) -> pd.DataFrame:
-    """Merge the monthly raw files into one hourly CSV clipped to ``[start, end]``."""
+    """Merge the monthly raw files into one hourly CSV clipped to ``[start, end]``.
+
+    Duplicate timestamps keep their first occurrence. The CSV is written atomically.
+
+    Args:
+        raw_dir: Folder holding the ``PrecBolsNaci_*.json`` files.
+        out_csv: Destination CSV (``timestamp``, ``price_cop_kwh``).
+        start: First day kept, from 00:00.
+        end: Last day kept, through 23:00.
+
+    Returns:
+        The frame that was written.
+    """
     frames = [
         parse_hourly_items(json.loads(path.read_text(encoding="utf-8")))
         for path in sorted(Path(raw_dir).glob(f"{METRIC_ID}_*.json"))
@@ -219,7 +303,15 @@ def build_prices_csv(raw_dir: Path, out_csv: Path, start: date, end: date) -> pd
 
 @dataclass
 class PriceReport:
-    """Quality summary of an hourly price series."""
+    """Quality summary of an hourly price series.
+
+    Attributes:
+        expected_rows: Hours in the full ``[start, end]`` grid (24 per day).
+        rows: Rows actually present.
+        missing_timestamps: Grid hours with no row.
+        duplicate_count: Rows whose timestamp repeats an earlier row.
+        nan_count: Rows with a missing price.
+    """
 
     expected_rows: int
     rows: int
@@ -229,7 +321,16 @@ class PriceReport:
 
 
 def validate_prices(df: pd.DataFrame, start: date, end: date) -> PriceReport:
-    """Compare ``df`` against the full hourly grid of ``[start, end]``."""
+    """Compare ``df`` against the full hourly grid of ``[start, end]``.
+
+    Args:
+        df: Frame with ``timestamp`` and ``price_cop_kwh`` columns.
+        start: First day of the expected grid.
+        end: Last day of the expected grid.
+
+    Returns:
+        Counts of expected, present, missing, duplicate and NaN hours.
+    """
     grid = pd.date_range(
         pd.Timestamp(start), pd.Timestamp(end) + pd.Timedelta(hours=23), freq="h"
     )
@@ -245,7 +346,11 @@ def validate_prices(df: pd.DataFrame, start: date, end: date) -> PriceReport:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point: download months, build the CSV and print a report."""
+    """CLI entry point: download months, build the CSV and print a report.
+
+    Returns:
+        ``0`` on success, ``1`` if any month failed to download.
+    """
     parser = argparse.ArgumentParser(description="Download XM hourly bolsa prices.")
     parser.add_argument("--start", type=date.fromisoformat, default=date(2024, 1, 1))
     parser.add_argument("--end", type=date.fromisoformat, default=date(2025, 12, 31))
