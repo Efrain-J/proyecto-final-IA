@@ -100,7 +100,7 @@ Collect the CREG resolutions and XM documents about batteries and the bolsa pric
 
 Build the agent loop with Groq tool calling, with an iteration cap, at least two tools (document search and `simulate`), and answers that cite their sources.
 
-**To do first:** O8, `energy/config.py` with root-anchored paths and shared settings. Do it before the first module that runs outside the repo root or needs shared settings (agent, eval, app). Load `.env` only in entry points.
+**Done first (2026-11-13):** O8, `energy/config.py`. Paths are anchored at the repo root, the shared settings live in one place, and `load_env()` is called only in entry points. The agent's settings (`T_MAX`, the Groq models) go there when the agent is built.
 
 **Obstacles:**
 

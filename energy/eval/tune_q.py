@@ -38,6 +38,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from energy import config
 from energy.data.io import write_bytes_atomic
 from energy.data.prices import DEFAULT_PRICES_PATH, load_prices, scenario_split
 from energy.rl.battery import PRESETS, get_preset
@@ -425,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--stage", choices=["1", "2", "3", "all"], default="all")
     parser.add_argument("--prices", type=Path, default=DEFAULT_PRICES_PATH)
-    parser.add_argument("--out", type=Path, default=Path("results/tuning"))
+    parser.add_argument("--out", type=Path, default=config.RESULTS_DIR / "tuning")
     args = parser.parse_args(argv)
 
     workers = args.workers or os.cpu_count() or 1

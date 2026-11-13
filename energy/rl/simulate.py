@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from energy import config
 from energy.data.prices import load_prices
 from energy.rl.battery import BatteryPreset, get_preset, transition_tables, valid_mask
 from energy.rl.factory import TEST_SHIFT_SEEDS, ShiftMix, add_shifts, get_mix
@@ -35,7 +36,7 @@ from energy.rl.qlearning import TabularPolicy, policy_stem
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_POLICIES_DIR = Path("artifacts/policies")
+DEFAULT_POLICIES_DIR = config.POLICIES_DIR
 POLICY_IDS = (
     "no_battery",
     "night_day",

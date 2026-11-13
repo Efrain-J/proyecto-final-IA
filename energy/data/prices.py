@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pandas as pd
 
-DEFAULT_PRICES_PATH = Path("data/processed/prices_hourly.csv")
+from energy import config
+
+DEFAULT_PRICES_PATH = config.PRICES_CSV
 TRAIN_LAST_MONTH = 9  # D5: train Jan-Sep, test Oct-Dec
 _COLUMNS = ["timestamp", "price_cop_kwh"]
 

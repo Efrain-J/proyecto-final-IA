@@ -12,7 +12,16 @@ Chosen scenario: **3.3 (battery dispatch with an MDP + regulation RAG assistant)
 - `docs/planned_steps.md`: the road map. When you finish a step or hit an obstacle, note it under that step.
 - `docs/architecture.md`: package map, dependency rules, interfaces (implemented vs. planned), fallbacks. New modules must follow it; log any change to an interface in `decisions.md`.
 
-Current state: the data layer (XM prices, corpus download) and the full RAG pipeline (cleaning, chunking, Qdrant index, retrieval with BM25 fallback) are implemented and tested. Part 1 is implemented for the 2025 scenario: Q-learning, the baselines, `simulate` and parallel training (results in D14). On branch `explore/factory-schedule`, D15 adds a synthetic factory shift schedule (A5) and 4 / 8 / 12 h batteries, with a shift-aware Q-learning and tuned baselines. The 2024 scenario, `eval/part1.py`, the agent and the dashboard are not started yet. Update this file with the real commands as code is added.
+Current state: the data layer (XM prices, corpus download) and the full RAG pipeline (cleaning, chunking, Qdrant index, retrieval with BM25 fallback) are implemented and tested. Part 1 is implemented (D15, merged):
+- shift-aware Q-learning with a synthetic factory shift schedule (A5)
+- 4 / 8 / 12 h batteries
+- tuned baselines
+- `simulate`
+- parallel training
+- tuned parameters (`energy.eval.tune_q`)
+- the 2024 and 2025 scenarios, with a cross-year check
+
+`energy/config.py` (O8) holds the root-anchored paths and shared settings. Still to do: `eval/part1.py` (results), the agent, the agent evaluation and the dashboard. Update this file with the real commands as code is added.
 
 ## Code documentation conventions
 
@@ -31,6 +40,7 @@ Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` an
 
 ## Code layout
 
+- `energy/config.py`: `ROOT`-anchored paths (`PRICES_CSV`, `CHUNKS_PATH`, `QDRANT_DIR`, `POLICIES_DIR`, `RESULTS_DIR`, …), shared settings, and `load_env()`, which only entry points call. Use these instead of relative paths. Run `python -m energy.…` from the repo root, because the package isn't installed.
 - `energy/data/io.py`: atomic file writes.
 - `energy/data/xm_prices.py`: XM bolsa prices through the XM API called directly (`pydataxm` is incompatible with pandas 3). `uv run python -m energy.data.xm_prices` writes `data/raw/xm/*.json` and `data/processed/prices_hourly.csv`. It's resumable; `--force` re-downloads.
 - `energy/data/corpus.py`: RAG documents listed in `data/corpus/sources.csv`. `uv run python -m energy.data.corpus` writes to `data/corpus/raw/`. The manifest columns `selector`, `in_force` and `superseded_by` drive the cleaning and the citations.

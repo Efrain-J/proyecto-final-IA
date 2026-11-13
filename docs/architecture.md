@@ -47,7 +47,7 @@ flowchart LR
 
 ```
 energy/
-  config.py          Planned (O8): root-anchored paths, model names, T_MAX, thresholds
+  config.py          Implemented (O8): root-anchored paths, shared settings, load_env()
   data/              Implemented: acquisition + loading
     io.py            atomic file writes
     xm_prices.py     XM API -> data/raw/xm/*.json -> data/processed/prices_hourly.csv
@@ -302,8 +302,11 @@ def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
 
 ## 10. Configuration and secrets
 
-- **Current rule:** run every command from the repo root. Path defaults are relative (`data/...`) and every CLI accepts flags to override them.
-- **Planned (O8):** `energy/config.py` builds every path from the repo root and holds the shared settings. `.env` is loaded only in entry points, never on import, so tests don't pick up real keys.
+- **Implemented (O8): `energy/config.py`.**
+  - It builds every path from `ROOT`, the repo root, and holds the shared settings.
+  - `load_env()` reads `ROOT/.env` without overriding real environment variables. It's called only in entry points, never on import, so tests don't pick up real keys.
+  - Every CLI still accepts flags to override the paths.
+- **Package not installed:** `pyproject.toml` has no build system, so `python -m energy.<module>` needs the repo root as the working directory, or `PYTHONPATH` set to it. The paths themselves no longer depend on where you start.
 - **Keys:** `.env` (gitignored) holds them; `.env.example` lists them with no values.
 
 | Key | Used by | Without it |

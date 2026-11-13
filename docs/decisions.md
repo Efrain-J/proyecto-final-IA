@@ -441,6 +441,15 @@ Code documentation: Google-style docstrings, a module docstring for every module
 - ~~**O5. Year and split**~~: resolved in D5 (changed 2026-11-13: within-year scenarios, train January–September and test October–December, 2025 first).
 - **O6. RAG document list** (see D6): a first version is downloaded. Revisit after reading the documents, especially for behind-the-meter batteries.
 - ~~**O7. Price state definition**~~: resolved in D14 (price ÷ the trailing 168-hour mean, 4 quartile bins).
+- ~~**O8**~~: done (2026-11-13).
+  - **`energy/config.py`:**
+    - `ROOT` plus every data, artifact and results path, all absolute.
+    - Shared settings: `USER_AGENT`, `MIN_TEXT_CHARS`, `EMBED_MODEL`, `QDRANT_COLLECTION`, `RETRIEVAL_K`, `SCORE_THRESHOLD`.
+    - `load_env()`, which reads the root `.env` without overriding real environment variables and is called only from entry points.
+  - Old constant names stay as aliases.
+  - **One finding:** the project isn't installed as a package (`pyproject.toml` has no build system), so `python -m energy...` still needs the repo root as the working directory, or `PYTHONPATH` set to it. The *paths* no longer depend on where you start. `streamlit run app.py` from the root is unaffected.
+
+  The original note follows.
 - **O8. To do: `energy/config.py` + root-anchored paths** (deferred 2026-11-12). Today every command must run from the repo root, because the path defaults are relative (`data/...`). Do it when the first module runs from somewhere else (a notebook, the eval, the app) or needs shared settings (model names, `T_max`, thresholds). How:
   - build every path from `Path(__file__).resolve().parents[1]`
   - load `.env` only in entry points, never on import, so tests don't pick up real keys

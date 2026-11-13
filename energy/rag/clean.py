@@ -5,7 +5,7 @@ drops the site menus), convert it to Markdown with markitdown, reduce links to
 their text, normalize whitespace, and mark CREG article headings. PDFs skip
 the selector step. See D11 for the reasoning.
 
-Run from the repo root, after adding or changing a document::
+Run from anywhere, after adding or changing a document::
 
     uv run python -m energy.rag.clean
 
@@ -27,10 +27,11 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from energy import config
 from energy.data.corpus import Source, load_manifest, target_path
 from energy.data.io import write_bytes_atomic
 
-MIN_CHARS = 1000
+MIN_CHARS = config.MIN_TEXT_CHARS
 
 _ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\ufeff]")
 _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
@@ -226,9 +227,9 @@ def main(argv: list[str] | None = None) -> int:
         ``0`` if every document was cleaned, ``1`` if any failed.
     """
     parser = argparse.ArgumentParser(description="Clean the RAG corpus.")
-    parser.add_argument("--manifest", type=Path, default=Path("data/corpus/sources.csv"))
-    parser.add_argument("--raw-dir", type=Path, default=Path("data/corpus/raw"))
-    parser.add_argument("--clean-dir", type=Path, default=Path("data/corpus/clean"))
+    parser.add_argument("--manifest", type=Path, default=config.CORPUS_MANIFEST)
+    parser.add_argument("--raw-dir", type=Path, default=config.CORPUS_RAW_DIR)
+    parser.add_argument("--clean-dir", type=Path, default=config.CORPUS_CLEAN_DIR)
     args = parser.parse_args(argv)
 
     sources = load_manifest(args.manifest)

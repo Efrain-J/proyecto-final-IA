@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from energy import config
 from energy.rl.battery import BatteryPreset, get_preset
 from energy.rl.factory import TEST_SHIFT_SEEDS, add_shifts, train_shift_seeds
 from energy.rl.features import add_relative_price
@@ -73,7 +74,8 @@ def test_constants():
         "no_battery", "night_day", "shift_schedule", "price_threshold",
         "perfect_foresight", "q_learning",
     )
-    assert str(DEFAULT_POLICIES_DIR).replace("\\", "/") == "artifacts/policies"
+    assert DEFAULT_POLICIES_DIR == config.POLICIES_DIR
+    assert config.POLICIES_DIR.as_posix().endswith("artifacts/policies")
 
 
 def test_savings_match_hand_computation(day_prices):

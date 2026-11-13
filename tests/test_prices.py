@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from energy import config
 from energy.data.prices import (
     DEFAULT_PRICES_PATH,
     TRAIN_LAST_MONTH,
@@ -33,7 +34,8 @@ def _hourly(start: str, end: str) -> pd.DataFrame:
 
 def test_constants():
     assert TRAIN_LAST_MONTH == 9
-    assert Path(DEFAULT_PRICES_PATH) == Path("data/processed/prices_hourly.csv")
+    assert Path(DEFAULT_PRICES_PATH) == config.PRICES_CSV
+    assert config.PRICES_CSV.as_posix().endswith("data/processed/prices_hourly.csv")
 
 
 def test_load_prices_columns_and_dtypes(tmp_path):

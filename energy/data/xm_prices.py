@@ -4,7 +4,7 @@ Calls XM's public API directly (``POST servapibi.xm.com.co/hourly``) instead of
 ``pydataxm``, which breaks with pandas 3 (see D10). One request per calendar
 month, because the API rejects ranges longer than about 31 days.
 
-Run from the repo root::
+Run from anywhere::
 
     uv run python -m energy.data.xm_prices [--start 2024-01-01] [--end 2025-12-31] [--force]
 
@@ -29,11 +29,12 @@ from typing import Any
 import httpx
 import pandas as pd
 
+from energy import config
 from energy.data.io import write_bytes_atomic, write_json_atomic
 
 API_URL = "https://servapibi.xm.com.co/hourly"
 METRIC_ID = "PrecBolsNaci"
-USER_AGENT = "trabajo-final-ia/0.1 (academic project)"
+USER_AGENT = config.USER_AGENT
 
 
 class XMResponseError(ValueError):
@@ -354,8 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Download XM hourly bolsa prices.")
     parser.add_argument("--start", type=date.fromisoformat, default=date(2024, 1, 1))
     parser.add_argument("--end", type=date.fromisoformat, default=date(2025, 12, 31))
-    parser.add_argument("--raw-dir", type=Path, default=Path("data/raw/xm"))
-    parser.add_argument("--out", type=Path, default=Path("data/processed/prices_hourly.csv"))
+    parser.add_argument("--raw-dir", type=Path, default=config.RAW_XM_DIR)
+    parser.add_argument("--out", type=Path, default=config.PRICES_CSV)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 

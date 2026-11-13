@@ -5,7 +5,7 @@ metadata: title, publisher and URL, plus the cleaning ``selector`` and the
 ``in_force`` / ``superseded_by`` fields that later become chunk metadata for
 citations (see D6, D11). Adding a document means adding a row and rerunning.
 
-Run from the repo root::
+Run from anywhere::
 
     uv run python -m energy.data.corpus [--force]
 
@@ -25,12 +25,13 @@ from pathlib import Path
 
 import httpx
 
+from energy import config
 from energy.data.io import write_bytes_atomic
 
-USER_AGENT = "trabajo-final-ia/0.1 (academic project)"
+USER_AGENT = config.USER_AGENT
 REQUIRED_COLUMNS = ("id", "title", "publisher", "url", "format")
 VALID_FORMATS = {"html", "pdf"}
-MIN_TEXT_CHARS = 1000
+MIN_TEXT_CHARS = config.MIN_TEXT_CHARS
 
 
 @dataclass(frozen=True)
@@ -215,8 +216,8 @@ def main(argv: list[str] | None = None) -> int:
         ``0`` if every document is available, ``1`` if any download failed.
     """
     parser = argparse.ArgumentParser(description="Download the RAG corpus.")
-    parser.add_argument("--manifest", type=Path, default=Path("data/corpus/sources.csv"))
-    parser.add_argument("--raw-dir", type=Path, default=Path("data/corpus/raw"))
+    parser.add_argument("--manifest", type=Path, default=config.CORPUS_MANIFEST)
+    parser.add_argument("--raw-dir", type=Path, default=config.CORPUS_RAW_DIR)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 

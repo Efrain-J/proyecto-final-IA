@@ -5,7 +5,7 @@ chunk never mixes two articles and every piece knows which article it came
 from. Long articles are then split by size with a small overlap. Documents
 without article headings (XM) are split directly. See D13.
 
-Run from the repo root, after ``energy.rag.clean``::
+Run from anywhere, after ``energy.rag.clean``::
 
     uv run python -m energy.rag.chunk [--size 900] [--overlap 120]
 
@@ -26,13 +26,14 @@ import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from energy import config
 from energy.data.corpus import Source, load_manifest
 from energy.data.io import write_bytes_atomic
 
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 120
 MIN_CHUNK_CHARS = 30
-DEFAULT_CHUNKS_PATH = Path("data/corpus/chunks.jsonl")
+DEFAULT_CHUNKS_PATH = config.CHUNKS_PATH
 
 # Same headings that ``energy.rag.clean.mark_articles`` / ``mark_annexes`` write
 # (D11). Annexes get their own sections; otherwise annex text would be cited
@@ -229,8 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         ``0`` if every document was chunked, ``1`` if any failed.
     """
     parser = argparse.ArgumentParser(description="Chunk the clean RAG corpus.")
-    parser.add_argument("--manifest", type=Path, default=Path("data/corpus/sources.csv"))
-    parser.add_argument("--clean-dir", type=Path, default=Path("data/corpus/clean"))
+    parser.add_argument("--manifest", type=Path, default=config.CORPUS_MANIFEST)
+    parser.add_argument("--clean-dir", type=Path, default=config.CORPUS_CLEAN_DIR)
     parser.add_argument("--out", type=Path, default=DEFAULT_CHUNKS_PATH)
     parser.add_argument("--size", type=int, default=CHUNK_SIZE)
     parser.add_argument("--overlap", type=int, default=CHUNK_OVERLAP)

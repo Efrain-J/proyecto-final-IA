@@ -8,7 +8,7 @@ Two interchangeable retrievers share the ``Retriever`` protocol:
 
 ``open_retriever`` picks one and logs why. See D13.
 
-Manual check, from the repo root::
+Manual check, from anywhere::
 
     uv run python -m energy.rag.retrieve "pregunta" [--k 5] [--bm25]
 """
@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from energy import config
 from energy.rag.chunk import (
     DEFAULT_CHUNKS_PATH,
     Chunk,
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Tuned for the nemotron embedder in the workshop (CLAUDE.md, Retrieval).
-SCORE_THRESHOLD = 0.25
+SCORE_THRESHOLD = config.SCORE_THRESHOLD
 BM25_K1 = 1.5
 BM25_B = 0.75
 _STOPWORDS = frozenset(
@@ -255,9 +256,7 @@ def open_retriever(
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point: print the ranked hits for a question."""
-    from dotenv import load_dotenv
-
-    load_dotenv()  # entry point only, never at import time
+    config.load_env()  # entry point only, never at import time
     # Windows consoles default to cp1252 and garble Spanish accents.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

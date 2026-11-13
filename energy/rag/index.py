@@ -5,7 +5,7 @@ proven in the workshop) and stored with its metadata as the point payload, so
 a search hit carries everything a citation needs. The index lives in
 ``data/qdrant/`` (gitignored, D8); the app only opens it. See D13.
 
-Run from the repo root, after ``energy.rag.chunk``::
+Run from anywhere, after ``energy.rag.chunk``::
 
     uv run python -m energy.rag.index
 
@@ -24,14 +24,15 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from energy import config
 from energy.rag.chunk import DEFAULT_CHUNKS_PATH, Chunk, embedding_text, read_chunks
 
 if TYPE_CHECKING:
     from qdrant_client import QdrantClient
 
-EMBED_MODEL = "nvidia/nemotron-3-embed-1b"
-COLLECTION = "regulacion"
-QDRANT_PATH = Path("data/qdrant")
+EMBED_MODEL = config.EMBED_MODEL
+COLLECTION = config.QDRANT_COLLECTION
+QDRANT_PATH = config.QDRANT_DIR
 
 _RETRIES = 4
 
@@ -135,10 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         ``0`` on success, ``1`` if the API key or the chunks file is missing.
     """
-    from dotenv import load_dotenv
     from qdrant_client import QdrantClient
 
-    load_dotenv()  # entry point only, never at import time
+    config.load_env()  # entry point only, never at import time
     parser = argparse.ArgumentParser(description="Build the Qdrant index of the RAG corpus.")
     parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH)
     parser.add_argument("--qdrant-path", type=Path, default=QDRANT_PATH)
