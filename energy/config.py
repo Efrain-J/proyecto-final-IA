@@ -36,6 +36,7 @@ MIN_TEXT_CHARS = 1000  # below this a downloaded/cleaned document is suspicious
 EMBED_MODEL = "nvidia/nemotron-3-embed-1b"
 QDRANT_COLLECTION = "regulacion"
 RETRIEVAL_K = 5
+AGENT_RETRIEVAL_K = 4  # passages per agent search: each costs ~400 tokens of Groq's budget (D16)
 SCORE_THRESHOLD = 0.25  # tuned for the nemotron embedder
 
 # LLM agent (D16)

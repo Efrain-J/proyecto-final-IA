@@ -13,6 +13,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from energy import config
 from energy.agent.tools import Tool, build_registry, run_tool, tool_schemas
 from energy.data.prices import load_prices
 from energy.rag.retrieve import Hit
@@ -186,10 +187,11 @@ def test_search_regulation_passes_query_and_k_to_retriever(prices):
     assert len(out["hits"]) == 3
 
 
-def test_search_regulation_default_k_is_five(prices):
+def test_search_regulation_default_k_is_the_agent_setting(prices):
     retr = FakeRetriever([make_hit(chunk_index=i) for i in range(8)])
     call(build_registry(retr, prices=prices), "search_regulation", query="q")
-    assert retr.calls[0][1] == 5
+    assert config.AGENT_RETRIEVAL_K == 4  # fewer passages to fit Groq's token limits (D16)
+    assert retr.calls[0][1] == config.AGENT_RETRIEVAL_K
 
 
 def test_search_regulation_without_hits_returns_note(prices):

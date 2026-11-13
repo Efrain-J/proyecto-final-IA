@@ -389,7 +389,7 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
   - **Why wait instead of switching:** the free tier allows 8,000 tokens per minute, and one question uses about 3–4k. Back-to-back questions hit the limit, and the 20b fallback follows the citation format less reliably.
 - **Answers:** in Spanish; code and identifiers stay in English.
 - **Two tools:**
-  - `search_regulation(query, k)` returns hits with `cita` (exactly `Hit.citation`), `in_force` and `superseded_by`, plus a reminder of how to cite.
+  - `search_regulation(query, k)` returns `config.AGENT_RETRIEVAL_K` = 4 hits by default (5 at first; cut to save Groq tokens, about 400 per passage). Each hit has `cita` (exactly `Hit.citation`), `in_force` and `superseded_by`, plus a reminder of how to cite.
   - `simulate_battery(policy, preset, start_date, end_date)` covers one calendar year at most.
     - **It runs `simulate()` once for each of the 5 test shift calendars** (`TEST_SHIFT_SEEDS`, mix `default`, kept fixed) for the requested policy and every baseline.
     - **It returns:**

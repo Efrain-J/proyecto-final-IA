@@ -140,7 +140,7 @@ def tool_schemas(registry: dict[str, Tool]) -> list[dict[str, Any]]:
 
 
 def _make_search(retriever: Retriever) -> Callable[..., dict[str, Any]]:
-    def search_regulation(query: str, k: int = config.RETRIEVAL_K) -> dict[str, Any]:
+    def search_regulation(query: str, k: int = config.AGENT_RETRIEVAL_K) -> dict[str, Any]:
         hits = retriever.search(query, k=k)
         out: dict[str, Any] = {
             "retriever": retriever.name,
@@ -320,7 +320,7 @@ def build_registry(
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Pregunta o términos de búsqueda, en español."},
-                "k": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Fragmentos a devolver (por defecto 5)."},
+                "k": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Fragmentos a devolver (por defecto 4)."},
             },
             "required": ["query"],
         },
