@@ -67,7 +67,7 @@ energy/
     chunk.py         Implemented: clean -> data/corpus/chunks.jsonl
     index.py         Implemented: chunks -> Qdrant (data/qdrant/)
     retrieve.py      Implemented: Hit, QdrantRetriever, BM25Retriever, open_retriever()
-  agent/             Planned: prompts.py, tools.py, loop.py, llm.py
+  agent/             Implemented (D16): llm.py, tools.py, prompts.py, loop.py, __main__.py
   eval/              Planned: part1.py, agent.py, questions.csv
   app/charts.py      Planned: pure functions -> plotly figures
 app.py               Planned: thin Streamlit entry point
@@ -245,44 +245,40 @@ class Retriever(Protocol):
 
 **In-force handling:** a hit from a replaced document (`in_force=False`) carries `superseded_by`. The prompt tells the agent to say so, and to cite the current rule for anything about today's rules.
 
-## 8. Agent (Planned)
+## 8. Agent (Implemented, D16)
 
 ```python
+# llm.py
+ToolCall(id, name, arguments: str); ChatReply(content, tool_calls)
+ChatFn = Callable[[list[dict], list[dict] | None], ChatReply]   # None = tools off
+def make_groq_chat(api_key=None, models=config.GROQ_MODELS, client=None, sleep=time.sleep) -> ChatFn
+class LLMError(Exception)
+
+# tools.py
 @dataclass(frozen=True)
-class Tool:
-    name: str
-    description: str
-    parameters: dict   # JSON Schema
-    fn: Callable[..., dict]
+class Tool: name; description; parameters (JSON Schema); fn
+def build_registry(retriever, prices=None, policies_dir=config.POLICIES_DIR) -> dict[str, Tool]
+def tool_schemas(registry) -> list[dict]                     # OpenAI tools format
+def run_tool(registry, name, raw_args) -> tuple[str, dict]   # never raises: {"error": ...}
 
-def build_registry(retriever: Retriever) -> dict[str, Tool]: ...
-def run_tool(registry, name: str, raw_args: str) -> str:
-    """JSON string; never raises: returns {"error": ...} instead."""
-
-@dataclass
-class AgentResult:
-    answer: str
-    tool_calls: list[ToolCallRecord]
-    citations: list[str]
-    stopped: Literal["answer", "t_max", "llm_error"]
-
-def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
-              t_max: int = T_MAX) -> AgentResult: ...
+# loop.py
+ToolCallRecord(name, arguments, ok, error)
+AgentResult(answer, tool_calls, citations, unverified_citations,
+            stopped: Literal["answer", "t_max", "llm_error"], retriever)
+def run_agent(question, history, registry, chat, t_max=config.T_MAX) -> AgentResult   # never raises
+def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the eval call this
 ```
 
-**Tools:**
-- `search_regulation(query, k)` returns hits with their citation, `in_force` and `superseded_by`.
-- `simulate_battery(policy, preset_id, start_date, end_date)` returns the **summary plus at most about 12 aggregated rows**, never the hourly trace. The date range is capped at 366 days.
-- Optional: `price_stats(start, end)`.
-
-**Loop:**
-- A manual Groq tool-calling loop, capped at `T_max`.
-- Tool errors go back to the model as observations.
-- A list of fallback models, with one retry on malformed tool calls.
-
-**Testability:** `ChatFn` is injected, so tests use a scripted fake LLM to cover the `T_max` cap, error observations and citation extraction offline.
-
-**Citations:** `AgentResult.citations` keeps only the citations in the answer that match hits retrieved in this run. That gives the evaluation a deterministic check.
+- **Tools:**
+  - `search_regulation(query, k)`: hits with `cita`, `in_force`, `superseded_by`, text up to 1,500 characters.
+  - `simulate_battery(policy, preset, start_date, end_date)`: one calendar year at most; mean, min and max over the 5 test shift calendars, the baselines, `comparison`, `by_hour_block`, `by_price_level`, `in_sample` and `notes`. Never the hourly trace.
+- **Loop:**
+  - up to `T_MAX` (5) tool rounds, then one call with the tools off
+  - a citation repair round when a search returned hits but the answer has no valid citation
+  - `LLMError` gives a retrieval-only answer
+- **Settings in `config`:** `GROQ_MODELS`, `T_MAX`, `HISTORY_MESSAGES` (6) and `LLM_TIMEOUT_S` (30).
+- **Manual check:** `uv run python -m energy.agent "pregunta" [--bm25] [--t-max N]`.
+- **Testability:** the model is injected (`ChatFn`) and so is the Groq client. Offline tests cover the T_max cap, error observations, the citation check and the repair round. Tests marked `network` call Groq for real.
 
 ## 9. Dashboard (Planned)
 
@@ -322,7 +318,7 @@ def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
 | CREG / XM websites | Not used at runtime | Committed raw and clean documents | Implemented |
 | NVIDIA embeddings | Query-time embedding | `BM25Retriever` over the committed `chunks.jsonl` (no torch, no second index), chosen by `open_retriever()` | Implemented |
 | Qdrant | Opened once (the app will cache `open_retriever()`) | BM25 if opening fails (lock, missing index, version) | Implemented |
-| Groq | Ordered model list, one retry | Retrieval-only answer: the error plus the top passages with citations | Planned |
+| Groq | Ordered model list; one retry for a malformed tool call or a short rate limit | Retrieval-only answer: the error plus the top passages with citations | Implemented |
 | Q-table missing | Load from `artifacts/policies/` | `NightDay` baseline (on the D15 branch: `ShiftSchedule`, also when the threshold file is missing), with a logged warning (the app should also show it) | Implemented |
 
 ## 12. Artifacts and reproducibility

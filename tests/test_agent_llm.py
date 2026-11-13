@@ -149,6 +149,39 @@ def test_other_errors_move_to_next_model_without_retry(error):
     assert client.models == ["model-a", "model-b"]
 
 
+def _chat_with_sleep(script: list):
+    client, waits = FakeClient(script), []
+    chat = make_groq_chat(api_key="test-key", models=MODELS, client=client, sleep=waits.append)
+    return chat, client, waits
+
+
+@pytest.mark.parametrize(
+    ("message", "seconds"),
+    [("Please try again in 630ms. Need more tokens?", 0.63), ("Please try again in 1.875s.", 1.875)],
+    ids=["milliseconds", "seconds"],
+)
+def test_short_rate_limit_is_waited_out_on_the_same_model(message, seconds):
+    chat, client, waits = _chat_with_sleep([FakeAPIError(429, message), response("desde a")])
+    assert chat(MESSAGES, None).content == "desde a"
+    assert client.models == ["model-a", "model-a"]
+    assert len(waits) == 1 and waits[0] == pytest.approx(seconds + 0.5)
+
+
+def test_long_rate_limit_moves_to_next_model_without_waiting():
+    chat, client, waits = _chat_with_sleep([FakeAPIError(429, "try again in 2m30s"), response("desde b")])
+    assert chat(MESSAGES, None).content == "desde b"
+    assert client.models == ["model-a", "model-b"]
+    assert waits == []
+
+
+def test_rate_limit_twice_on_the_same_model_moves_on():
+    err = lambda: FakeAPIError(429, "try again in 1s")  # noqa: E731
+    chat, client, waits = _chat_with_sleep([err(), err(), response("desde b")])
+    assert chat(MESSAGES, None).content == "desde b"
+    assert client.models == ["model-a", "model-a", "model-b"]
+    assert len(waits) == 1
+
+
 def test_all_models_failing_raises_llm_error_naming_last_error():
     chat, client = make_chat([FakeAPIError(429, "primero"), FakeAPIError(503, "segundo-fallo")])
     with pytest.raises(LLMError, match="segundo-fallo"):

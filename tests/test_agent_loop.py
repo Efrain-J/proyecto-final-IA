@@ -17,7 +17,7 @@ import pytest
 from energy import config
 from energy.agent.llm import ChatReply, LLMError, ToolCall
 from energy.agent.loop import AgentResult, ToolCallRecord, open_agent, run_agent
-from energy.agent.prompts import system_prompt
+from energy.agent.prompts import REFUSAL, system_prompt
 from energy.agent.tools import build_registry
 from energy.data.prices import load_prices
 from energy.rag.retrieve import Hit
@@ -142,7 +142,7 @@ def test_one_tool_round_then_answer_uses_openai_message_shapes(registry):
 
 def test_two_tool_calls_in_one_reply_are_paired_by_id(registry):
     calls = [ask_search("a", "uno"), ask_search("b", "dos")]
-    chat = ScriptedChat([ChatReply(None, calls), say("listo")])
+    chat = ScriptedChat([ChatReply(None, calls), say(f"listo [{CITA}]")])
     result = run_agent("q", [], registry, chat)
     second = chat.calls[1][0]
     (assistant,) = [m for m in second if m["role"] == "assistant"]
@@ -243,10 +243,40 @@ def test_non_citation_brackets_are_ignored(registry, fragment):
     assert result.unverified_citations == []
 
 
-def test_answer_without_brackets_has_no_citations(registry):
-    chat = ScriptedChat([ChatReply(None, [ask_search()]), say("Respuesta sin citas.")])
+def test_answer_without_citations_after_search_gets_one_repair_call(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_search()]), say("Respuesta sin citas."), say("Sigue sin citas.")])
     result = run_agent("q", [], registry, chat)
+    assert len(chat.calls) == 3
+    repair_messages, repair_tools = chat.calls[2]
+    assert repair_tools is None
+    assert CITA in repair_messages[-1]["content"]  # the repair lists the retrieved citations
+    assert result.answer == "Respuesta sin citas."  # a failed repair keeps the original
     assert result.citations == [] and result.unverified_citations == []
+
+
+def test_successful_repair_replaces_the_answer(registry):
+    fixed = f"Respuesta con cita [{CITA}]."
+    chat = ScriptedChat([ChatReply(None, [ask_search()]), say("Respuesta 【cita】."), say(fixed)])
+    result = run_agent("q", [], registry, chat)
+    assert result.answer == fixed
+    assert [norm(c) for c in result.citations] == [norm(CITA)]
+
+
+def test_no_repair_without_a_search_or_for_the_refusal(registry):
+    chat = ScriptedChat([say("Respuesta sin buscar.")])
+    run_agent("q", [], registry, chat)
+    assert len(chat.calls) == 1
+    chat = ScriptedChat([ChatReply(None, [ask_search()]), say(REFUSAL)])
+    result = run_agent("q", [], registry, chat)
+    assert len(chat.calls) == 2 and result.answer == REFUSAL
+
+
+def test_native_lenticular_brackets_and_cita_prefix_count_as_citations(registry):
+    answer = f"Dice A 【{CITA}】 y B [cita: {CITA}]."
+    chat = ScriptedChat([ChatReply(None, [ask_search()]), say(answer)])
+    result = run_agent("q", [], registry, chat)
+    assert [norm(c) for c in result.citations] == [norm(CITA)]
+    assert "【" not in result.answer and "cita:" not in result.answer
 
 
 # --- history -------------------------------------------------------------------

@@ -37,6 +37,12 @@ QDRANT_COLLECTION = "regulacion"
 RETRIEVAL_K = 5
 SCORE_THRESHOLD = 0.25  # tuned for the nemotron embedder
 
+# LLM agent (D16)
+GROQ_MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b")  # tried in order
+T_MAX = 5  # tool rounds before the agent must answer
+HISTORY_MESSAGES = 6  # earlier chat messages kept in the prompt
+LLM_TIMEOUT_S = 30
+
 
 def load_env() -> bool:
     """Load ``ENV_FILE`` into ``os.environ`` without overriding existing variables.

@@ -373,6 +373,55 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 
 **Small side effect:** the tuned price rule's cut-offs depend on the training shift patterns. For 4 h, seed 0 now picks worse cut-offs (2.09 M against 2.50 M). The 4 h comparison isn't affected, because the shift schedule is the best rule there.
 
+## D16. LLM agent: hand-written loop, two tools, checked citations
+
+**Decided and implemented 2026-11-13** in `energy/agent/`, written test-first.
+
+- **Loop:** written by hand, without LangGraph.
+  - The graph is trivial: call the model, run the tools, repeat until an answer or T_max.
+  - The model is injected as a `ChatFn`, so every path is tested offline with a scripted fake.
+  - It needs no extra dependencies, and the report can show the whole loop.
+- **Model:** Groq `openai/gpt-oss-120b`, falling back to `openai/gpt-oss-20b`, with `reasoning_effort="low"`.
+  - **Retries:**
+    - A malformed tool call is retried once on the same model.
+    - A rate limit that asks to wait at most 15 s is waited out on the same model.
+    - Anything else moves to the next model.
+  - **Why wait instead of switching:** the free tier allows 8,000 tokens per minute, and one question uses about 3–4k. Back-to-back questions hit the limit, and the 20b fallback follows the citation format less reliably.
+- **Answers:** in Spanish; code and identifiers stay in English.
+- **Two tools:**
+  - `search_regulation(query, k)` returns hits with `cita` (exactly `Hit.citation`), `in_force` and `superseded_by`, plus a reminder of how to cite.
+  - `simulate_battery(policy, preset, start_date, end_date)` covers one calendar year at most.
+    - **It runs `simulate()` once for each of the 5 test shift calendars** (`TEST_SHIFT_SEEDS`, mix `default`, kept fixed) for the requested policy and every baseline.
+    - **It returns:**
+      - the mean, min and max savings
+      - the baseline means and the best fixed rule
+      - a pre-written `comparison` sentence. The model once flipped the sign of the percentage, so the code writes this sentence.
+      - `by_hour_block` (12 rows) and `by_price_level` (4 quartile rows). These profiles are what let the agent explain the decisions.
+      - `in_sample`, true when the range overlaps the training months
+      - `notes`, the assumptions A2, A4 and A5
+    - **Speed:** about 0.3 s for 3 months and 0.9 s for a year.
+- **T_max = 5 tool rounds.** After that, one last call with the tools off (`stopped="t_max"`). Tool errors return as `{"error": ...}` observations and never raise.
+- **Without the LLM** (no key, or every model failing): a retrieval-only answer with the top 3 passages and their citations (`stopped="llm_error"`).
+- **Citations are checked:**
+  - Every `[...]` with at least 3 letters that isn't a Markdown link is a citation attempt. gpt-oss's native `【…】` brackets and a `cita:` prefix are normalized first.
+  - Attempts that match a `cita` retrieved in the same run, ignoring case and spacing, go to `citations`. The rest go to `unverified_citations`.
+  - **Repair round:** if a search returned hits and the answer has no valid citation (and isn't the refusal), the agent makes one extra call, outside T_max. That call asks the model to rewrite the answer citing from the list of retrieved citations. The repaired version is kept only if it has valid citations.
+  - **Why the repair round:** in the live check, gpt-oss-120b sometimes wrote a literal `【cita】` or dropped the brackets.
+- **Prompt rules:**
+  - the exact refusal phrase
+  - for replaced rules, say so and cite the current one
+  - the behind-the-meter limitation (D6): never apply the rules for market agents or SAEB dispatched by the CND to the user's battery, and never conclude it is allowed or forbidden
+  - numbers only from `simulate_battery`, in COP/kWh
+  - no general knowledge beyond the tools
+  - "¿por qué carga…?" questions always call `simulate_battery`
+- **Answer formats** (agreed with the user):
+  - **Simulation:** a bold mean-and-range line, a 3-row table `Política | Ahorro promedio (COP)`, the comparison sentence, a **Supuestos** line, and `*Fuente: simulación propia con precios de bolsa de XM, <año>.*`
+  - **Comparisons:** `Batería | Q-learning | Mejor regla | % del óptimo`, at most 6 rows.
+  - **Tables appear only for simulation results.** Regulation answers are short paragraphs ending in citations, then a "no es asesoría legal" line.
+- **Live check:**
+  - **What passed:** the regulation, simulation, mixed and trap questions behaved as specified; the network tests passed in 4 out of 4 runs.
+  - **Known weakness:** the model copies numbers by hand, and once changed a digit in the table (2.970.674 instead of 2.974.674). The agent evaluation should compare the table with the tool output.
+
 ## D10. Call XM's API directly instead of `pydataxm`
 
 **Status:** Decided (2026-11-12)

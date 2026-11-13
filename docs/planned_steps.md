@@ -103,8 +103,12 @@ Build the agent loop with Groq tool calling, with an iteration cap, at least two
 **Done first (2026-11-13):** O8, `energy/config.py`. Paths are anchored at the repo root, the shared settings live in one place, and `load_env()` is called only in entry points. The agent's settings (`T_MAX`, the Groq models) go there when the agent is built.
 
 **Obstacles:**
+- **The model's citations were unreliable.** It sometimes wrote a literal `【cita】`, gpt-oss's native brackets, or dropped the brackets altogether. Fixed with normalization, a reminder inside the search results, and one repair round (D16).
+- **It applied CREG rules for CND-dispatched SAEB to the user's battery** and called it "permitida y recomendada". The prompt now states the D6 limitation explicitly, and "¿por qué carga…?" questions must call the simulation.
+- **It flipped the sign of the comparison** ("5,3 % menos" when it was more). The tool now returns a pre-written `comparison` sentence.
+- **The free Groq tier limits tokens per minute** (8,000 TPM). Back-to-back questions dropped to the 20b model, which follows the format worse, so short waits are now waited out on the same model.
 
-**Done:**
+**Done (2026-11-13):** `energy/agent/` (D16), written test-first. Answers are in Spanish, with two tools and the agreed answer formats. Try it with `uv run python -m energy.agent "pregunta"`. 479 offline tests and 3 network tests pass; the live check covered regulation, simulation, mixed, trap and no-key questions.
 
 ## 6. Dashboard
 
