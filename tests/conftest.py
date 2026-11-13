@@ -218,3 +218,21 @@ def synthetic_prices():
         return pd.DataFrame({"timestamp": ts, "price_cop_kwh": price})
 
     return make
+
+
+@pytest.fixture(scope="session")
+def always_on():
+    """Function: always_on(frame) -> copy with `shift_type` = 3 (full) and `factory_on` = True.
+
+    D15: `simulate` adds random shifts to frames that lack them, so tests that rely on
+    "the factory always runs" must say so explicitly.
+    """
+    import numpy as np
+
+    def make(frame):
+        out = frame.copy()
+        out["shift_type"] = np.full(len(out), 3, dtype=np.int8)
+        out["factory_on"] = np.ones(len(out), dtype=bool)
+        return out
+
+    return make

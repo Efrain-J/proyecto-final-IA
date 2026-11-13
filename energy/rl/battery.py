@@ -1,8 +1,10 @@
-"""Battery physics for the dispatch MDP (D9, D14).
+"""Battery physics for the dispatch MDP (D9, D14, D15).
 
 ``step`` is the single definition of the physics; ``transition_tables`` and
 ``valid_mask`` derive lookup arrays from it so training and replay never re-implement
 it. Library only, no CLI. Every battery starts empty (D9); wear is ignored (A3).
+Discharging is possible only while the factory runs (D15, A5); ``transition_tables`` stays
+pure physics and the factory flag lives in ``step`` and ``valid_mask``.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ class BatteryPreset:
 
 PRESETS: dict[str, BatteryPreset] = {
     f"{h}h": BatteryPreset(id=f"{h}h", label=f"{h} h", capacity_kwh=100.0 * h, power_kw=100.0)
-    for h in (2, 3, 4)
+    for h in (4, 8, 12)  # D15 (replaces D9's 2/3/4 h)
 }
 
 
@@ -77,15 +79,19 @@ def get_preset(preset: str | BatteryPreset) -> BatteryPreset:
         raise ValueError(f"Unknown preset {preset!r}; valid: {sorted(PRESETS)}") from None
 
 
-def step(level: int, action: Action | int, preset: BatteryPreset) -> tuple[int, float]:
+def step(
+    level: int, action: Action | int, preset: BatteryPreset, factory_on: bool = True
+) -> tuple[int, float]:
     """Apply one hour of ``action`` at ``level``.
 
-    An impossible action (discharge when empty, charge when full) is treated as idle.
+    An impossible action (discharge when empty or while the factory is off, charge when
+    full) is treated as idle.
 
     Args:
         level: Current state-of-charge level.
         action: Dispatch action.
         preset: Battery.
+        factory_on: Whether the factory runs this hour; discharging needs it (D15).
 
     Returns:
         ``(next_level, grid_kwh)``, where ``grid_kwh`` is the change in energy bought
@@ -99,7 +105,7 @@ def step(level: int, action: Action | int, preset: BatteryPreset) -> tuple[int, 
     eta = preset.one_way_efficiency
     if action == Action.CHARGE and level < preset.duration_h:
         return level + 1, preset.power_kw / eta
-    if action == Action.DISCHARGE and level > 0:
+    if action == Action.DISCHARGE and level > 0 and factory_on:
         return level - 1, -preset.power_kw * eta
     return level, 0.0
 
@@ -115,9 +121,14 @@ def transition_tables(preset: BatteryPreset) -> tuple[np.ndarray, np.ndarray]:
     return next_level, grid_kwh
 
 
-def valid_mask(preset: BatteryPreset) -> np.ndarray:
-    """Boolean ``[n_levels, 3]``: True where the action is possible at that level."""
+def valid_mask(preset: BatteryPreset, factory_on: bool = True) -> np.ndarray:
+    """Boolean ``[n_levels, 3]``: True where the action is possible at that level.
+
+    With ``factory_on=False`` discharging is impossible at every level (D15).
+    """
     mask = np.ones((preset.n_levels, N_ACTIONS), dtype=np.bool_)
+    if not factory_on:
+        mask[:, Action.DISCHARGE] = False
     mask[0, Action.DISCHARGE] = False
     mask[preset.duration_h, Action.CHARGE] = False
     return mask

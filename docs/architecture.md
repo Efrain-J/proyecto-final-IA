@@ -52,11 +52,13 @@ energy/
     io.py            atomic file writes
     xm_prices.py     XM API -> data/raw/xm/*.json -> data/processed/prices_hourly.csv
     corpus.py        manifest (sources.csv) + document download
-    prices.py        Planned (O9): load_prices(), train/test split
-  rl/                Planned: Part 1, pure numpy/pandas
-    battery.py       BatteryPreset, PRESETS, Action, step()  <- the only battery dynamics
+    prices.py        Implemented: load_prices(), scenario_split()
+  rl/                Implemented: Part 1, pure numpy/pandas (value_iteration.py not built)
+    battery.py       BatteryPreset, PRESETS, Action, step(..., factory_on)  <- the only battery dynamics
+    factory.py       D15/A5 (branch): shift types, ShiftMix/MIXES, add_shifts()
     features.py      relative price level, Discretizer (bin edges fitted on train)
-    policies.py      Policy protocol + baselines
+    policies.py      Policy protocol, factory_columns(), NoBattery, NightDay, ShiftSchedule,
+                     PriceThreshold (tuned), PerfectForesight
     qlearning.py, value_iteration.py   train -> TabularPolicy (save/load)
     simulate.py      simulate() + SimulationResult
     train.py         python -m energy.rl.train -> artifacts/policies/
@@ -102,6 +104,20 @@ results/             Planned: metrics CSVs and plots (committed)
 | `results/*.csv`, `results/*.png` | Part 1 metrics and the agent evaluation. Committed as evidence for the report. |
 
 ## 5. Part 1 design (Implemented)
+
+> **Branch `explore/factory-schedule` (D15).** The code below shows the D14 baseline, with these differences:
+>
+> - **Presets:** 4 h, 8 h and 12 h.
+> - **Battery physics:** `step()` and `valid_mask()` take `factory_on`, and a discharge while the factory is off becomes idle.
+> - **Frames:** they may carry `shift_type` and `factory_on`. A frame without them means the factory always runs (`factory_columns()`).
+> - **Q-table:** shape `(12, levels, 4, 4 shift types, 3)`. `train_q_learning` accepts a list of frames, one per shift pattern, with episodes kept within each.
+> - **New baselines:** `ShiftSchedule` and `PriceThreshold`. `PriceThreshold.tune` chooses its cut-offs on the training data, and they're saved as `threshold_<preset>_<year>.json`.
+> - **`simulate(..., mix, shift_seed)`:**
+>   - It adds shifts over the whole price frame when they're missing.
+>   - The summary gains `shift_mix` and `shift_seed`.
+>   - The policy ids are `no_battery, night_day, shift_schedule, price_threshold, perfect_foresight, q_learning`.
+>   - A missing table falls back to `ShiftSchedule`.
+> - **`train.py`:** trains on 5 shift patterns and reports the mean over the 5 `TEST_SHIFT_SEEDS`.
 
 ```python
 # rl/battery.py
@@ -304,7 +320,7 @@ def run_agent(question: str, history: list[dict], registry, chat: ChatFn,
 | NVIDIA embeddings | Query-time embedding | `BM25Retriever` over the committed `chunks.jsonl` (no torch, no second index), chosen by `open_retriever()` | Implemented |
 | Qdrant | Opened once (the app will cache `open_retriever()`) | BM25 if opening fails (lock, missing index, version) | Implemented |
 | Groq | Ordered model list, one retry | Retrieval-only answer: the error plus the top passages with citations | Planned |
-| Q-table missing | Load from `artifacts/policies/` | `NightDay` baseline, with a logged warning (the app should also show it) | Implemented |
+| Q-table missing | Load from `artifacts/policies/` | `NightDay` baseline (on the D15 branch: `ShiftSchedule`, also when the threshold file is missing), with a logged warning (the app should also show it) | Implemented |
 
 ## 12. Artifacts and reproducibility
 

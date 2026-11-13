@@ -106,6 +106,8 @@ The user picks the battery from a fixed list of presets (capacity kWh / power kW
 | 3 h | 300 kWh | 3 h | 4 |
 | 4 h | 400 kWh | 4 h | 5 |
 
+**Replaced on branch `explore/factory-schedule` by D15:** the presets there are 4 h, 8 h and 12 h (400, 800 and 1,200 kWh, still 100 kW and 90% round trip).
+
 **One Q-table per preset.** Each preset has its own duration, so this is the same as one per duration.
 - **Why not one agent for all batteries:** in tabular Q-learning, adding the preset to the state just splits one table into separate parts that share nothing. The number of charge levels also differs per preset.
 - **Real sharing across batteries** would need function approximation (such as a neural network). That's more complex and harder to present as the team's own implementation (MVP).
@@ -203,7 +205,104 @@ Why, for the report:
 - **The schedule's hours were chosen from the 2024–2025 hourly profile**, which includes the test months, so it has a small information advantage.
 - **Q-learning found nearly the same rule on its own** from January–September, without being told the hours.
 
+**On branch `explore/factory-schedule`, D15 extends this setting:** a factory shift schedule, longer batteries, and a state that knows today's shift.
+
 The test on synthetic data checks Q-learning ≥ 90% of the fixed schedule. A threshold relative to perfect foresight was dropped: there, even the schedule only reaches 75–84%, because perfect foresight profits from the noise.
+
+## D15. Factory shift schedule, long batteries and shift-aware Q-learning
+
+**Status:** Decided (2026-11-13), on branch `explore/factory-schedule`. Changes parts of D9 and D14 and keeps the rest.
+
+**Why:** under D14 the factory always runs. The daily price pattern is so regular that a hand-made rule ("charge at 02:00, discharge at 18:00") is near-optimal, and Q-learning only reaches 95–97% of it. When the factory doesn't always run, the decision becomes truly sequential: stored energy is only worth something if a future hour with the factory on comes at a high price. That's where learning helps.
+
+**Prototype evidence (2026-11-13).** Three rounds in the scratchpad, on 2025 prices, training on January–September and testing on October–December. The results are averaged over 4 training seeds × 5 test shift patterns, with the baselines' parameters tuned on the training months:
+
+| Battery | Q-learning ÷ best rule | Best rule | Q-learning ÷ perfect foresight |
+|---|---|---|---|
+| 4 h | 0.98–1.00 | shift schedule | 73% |
+| 6 h | 1.06 | tuned price rule | 70% |
+| 8 h | 1.06 | tuned price rule | 69% |
+| 12 h | 1.04 | tuned price rule | 65% |
+| 24 h | 0.98 | tuned price rule | 55% |
+
+- **Long batteries:** every training seed was at least 1.00× the best rule for 6–12 h.
+- **The baseline matters:** before the price rule's cut-offs were tuned, Q-learning seemed to win by 16% at 6 h.
+- **Training amount:** doubling the training data or the passes changed nothing, so the long batteries weren't undertrained.
+- **24 h is too large for a table:** 25 charge levels.
+
+**The setting:**
+- **The factory runs in shifts (A5).** The battery can **discharge only while the factory is on**; this replaces "always" in A2.
+  - When the factory is on, its load is at least the battery's power.
+  - When it's off, discharging would export energy, so it's not allowed.
+  - Charging is allowed at any time.
+- **Presets (replaces D9's values):** 4 h, 8 h and 12 h, all at 100 kW and 90% round trip: 400, 800 and 1,200 kWh, with 5, 9 and 13 charge levels.
+  - 4 h is the reference case, where a schedule still wins.
+  - 8 h and 12 h are where Q-learning wins.
+- **State (extends D14):** (hour pair, charge level, price level, **today's shift type**: off, morning, afternoon or full day).
+  - Whether the factory is on follows from the hour pair and the shift type, because shift edges fall on pair boundaries.
+  - Two alternatives were tested. Only "factory on now" was too little information. Adding "tomorrow is a work day" made the table too sparse for nine months of data.
+- **Training:** the January–September prices are **repeated with 5 random shift patterns**, with episodes kept within each pattern. The same prices under different schedules show the agent more situations. Everything else is as in D14: at most 300 passes, early stopping, α decaying from 0.1 to 0.02, weekly episodes, relative reward.
+- **Evaluation:** each test result is the **average over 5 test shift patterns**, with fixed seeds never used in training, on October–December.
+
+**Baselines (replaces D14's list):**
+- **Do nothing.**
+- **Shift schedule:**
+  - On work days, charge from 02:00 for as many hours as the battery's duration.
+  - Discharge from 18:00 while the factory is on (afternoon or full-day shifts), or during the last hours of a morning shift.
+- **Tuned price rule:**
+  - Charge when the price level (`rel_price`) is below a cheap cut-off.
+  - Discharge when it's above an expensive cut-off and the factory is on.
+  - The cut-offs are quantiles of the training price levels: cheap ∈ {10…50%}, expensive ∈ {50…90%}, expensive > cheap. The pair is chosen by the mean training savings over the same 5 shift patterns.
+  - In the prototype it picked 50% / 80% for 6–12 h.
+- **Perfect foresight,** now limited to hours when the factory is on.
+- **The fixed schedule (`NightDay`)** stays as a simple reference.
+- **The reported metric:** Q-learning ÷ the best rule.
+  - Short batteries favor the schedule and long ones the price rule. Q-learning matches or beats whichever is best without anyone having to choose.
+  - In the prototype, the best rule was picked on the test months, which slightly favors the baselines.
+
+**Assumption A5: the factory shift schedule is synthetic** (2026-11-13).
+- **Generation:** one random shift type per calendar day, by day of week:
+  - Monday–Friday: 45% full day (06:00–22:00), 30% morning (06:00–14:00), 15% afternoon (14:00–22:00), 10% off.
+  - Saturday: 40% morning, otherwise off.
+  - Sunday: off.
+- **Reproducibility:** each pattern comes from a seeded generator. Training, tuning and testing use separate seeds, and the day's shift plan is known at 00:00.
+- **The probabilities are invented,** plausible for a factory but not taken from data.
+- **What it doesn't model:**
+  - Days are independent: no streaks of busy weeks, no maintenance shutdowns.
+  - No Colombian public holidays.
+  - No seasonal pattern.
+  - The load is all or nothing: no base load at night (lighting, refrigeration) that would allow some discharge outside shifts.
+  - The shift edges are fixed.
+- **Named mixes:** `default` (the one above), `mostly_double` and `mostly_single`. Only `default` is trained. The others show how the trained policy holds up on another factory's pattern, and can be a dashboard setting.
+
+**Implemented (2026-11-13), test-first:** a Sonnet agent wrote the tests, and a second one wrote the code to pass them; 359 tests pass. The new module is `energy/rl/factory.py`; `battery`, `policies`, `qlearning`, `simulate` and `train` were extended.
+
+**Results, scenario 2025** (savings in COP over October–December, mean of the 5 test shift patterns, seed 0):
+
+| Battery | Q-learning | Shift schedule | Tuned price rule | Fixed schedule | Perfect foresight | Q ÷ best rule | Q ÷ perfect |
+|---|---|---|---|---|---|---|---|
+| 4 h | 2.61 M | **2.70 M** | 2.50 M | 2.64 M | 3.63 M | 0.97 | 72% |
+| 8 h | **3.20 M** | 2.47 M | 2.97 M | 2.56 M | 4.56 M | 1.07 | 70% |
+| 12 h | **3.13 M** | 2.30 M | 3.07 M | 2.25 M | 4.96 M | 1.02 | 63% |
+
+**Across training seeds 0, 1 and 2,** Q-learning ÷ best rule averages:
+- 4 h: 0.99, ranging 0.97–1.02.
+- 8 h: 1.05, ranging 1.01–1.07.
+- 12 h: 1.06, ranging 1.02–1.08.
+
+That matches the prototype, with a spread of about ±0.03 between seeds.
+
+**Timing and size:**
+- Each job takes about 14 s. The three run in 16 s in parallel against 36 s one after another.
+- Early stopping never triggers with 5 training patterns, so every job runs all 300 passes.
+- The Q-tables are 8 / 15 / 22 KB.
+- The threshold files are 60 B. For 8 h the tuned cut-offs are the median and the 80th percentile.
+
+**Implementation choices:**
+- **Shift schedule:** its windows don't wrap past midnight. Discharge overrides charge where they overlap, which happens on morning days for 8 h and 12 h, so that rule issues some impossible actions. It's weak for long batteries, and the price rule is the best rule there.
+- **Old D14 tables:** a 4-dimensional table can't be loaded as a policy, so `resolve_policy` falls back to the shift schedule instead of crashing.
+
+**One test pattern varies a lot.** On test pattern 1000, 8 h, Q-learning beats the price rule by only 1.6%, so per-pattern results vary. Report the mean over patterns.
 
 ## D10. Call XM's API directly instead of `pydataxm`
 
@@ -297,4 +396,8 @@ Until then, nothing reads the CSV.
 - The agent knows the current hour's price when deciding (A4), but the real bolsa price is settled after the fact, so the savings are optimistic.
 - Each scenario is tested on only three months (October–December) of one year (D5).
 - On 2025, Q-learning earns 95–97% of a simple fixed schedule. With such a regular daily price pattern, learning adds little over a well-chosen rule (D14).
+- **Branch `explore/factory-schedule` (D15):**
+  - The factory's shift schedule is synthetic (A5), and the factory's load is all or nothing.
+  - Q-learning's edge over the best tuned rule is modest (+4–6% for 6–12 h batteries).
+  - Q-learning reaches only 65–70% of perfect foresight.
 - This is an academic prototype, not financial, legal or regulatory advice.

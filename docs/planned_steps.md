@@ -45,6 +45,24 @@ Define the battery problem as an MDP (state, actions, transitions, reward), solv
 
 Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/policies/q_{2h,3h,4h}_2025.*`. The results are in D14. 276 tests pass. Still to do: the 2024 scenario (`--scenarios 2024`) and `eval/part1.py` (metrics and plots in `results/`).
 
+**Branch `explore/factory-schedule` (2026-11-13), D15 + A5:**
+- **Why:** Q-learning didn't beat a hand rule when the factory always runs.
+- **Exploration:** we tried a factory with random shifts (discharge only while it runs) and longer batteries, through three rounds of prototypes in the scratchpad.
+- **Implemented test-first:**
+  - `energy/rl/factory.py`, the shift generator.
+  - Shift-aware masks in `battery`.
+  - `ShiftSchedule`, plus a `PriceThreshold` tuned on the training months.
+  - A Q-table with the shift dimension, trained on 5 shift patterns.
+  - `simulate` adding shifts, and evaluation averaged over 5 test patterns.
+- **Result:**
+  - For 8 h and 12 h batteries, Q-learning beats the best tuned rule by about 5%.
+  - For 4 h the shift schedule still wins, by about 1%.
+
+**Obstacles:**
+- **Rigging the comparison.** An untuned price rule made Q-learning look 16% better. Tuning its cut-offs on the training months brought the edge down to about 5%.
+- **24 h is too large for a table** (25 charge levels).
+- **"Tomorrow's shift" in the state** made the data too sparse.
+
 ## 3. Simulation tool
 
 Wrap the trained policy in `simulate(policy, dates)` so it returns the decisions and savings for a date range. The dashboard and the agent both use it.
