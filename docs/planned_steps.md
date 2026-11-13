@@ -63,6 +63,11 @@ Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/po
 - **24 h is too large for a table** (25 charge levels).
 - **"Tomorrow's shift" in the state** made the data too sparse.
 
+**Parameter tuning (2026-11-13):**
+- `energy/eval/tune_q.py` searched the parameters on validation months only. It found γ 0.995, α ending at 0.005, and 10 shift patterns, which were tested once on October–December and adopted.
+- **Result:** Q-learning ÷ best rule is now 1.00 for 4 h, 1.07 for 8 h and 1.11 for 12 h (D15).
+- The γ that worked best, 0.995, was the highest value tried; a higher one might do better still.
+
 ## 3. Simulation tool
 
 Wrap the trained policy in `simulate(policy, dates)` so it returns the decisions and savings for a date range. The dashboard and the agent both use it.

@@ -41,22 +41,24 @@ REQUIRED_COLUMNS = ("rel_price", "shift_type", "factory_on")
 
 @dataclass(frozen=True)
 class QConfig:
-    """Hyper-parameters (defaults from D14).
+    """Hyper-parameters (D14, with ``gamma`` and ``alpha_end`` tuned in D15).
 
     ``alpha_end`` is an addition to D14: the learning rate decays linearly from ``alpha``
     to ``alpha_end`` over ``max_epochs``, which damps the constant-alpha jitter that
     otherwise keeps flipping near-tied greedy actions and defeats early stopping.
+    ``gamma`` 0.995 and ``alpha_end`` 0.005 were chosen on validation months for the 8 h
+    battery (``energy.eval.tune_q``, results/tuning/); see D15.
     """
 
     max_epochs: int = 300
     alpha: float = 0.1
-    gamma: float = 0.99
+    gamma: float = 0.995
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
     patience: int = 20
     episode_hours: int = 168
     seed: int = 0
-    alpha_end: float = 0.02  # learning rate decays linearly to this over max_epochs
+    alpha_end: float = 0.005  # learning rate decays linearly to this over max_epochs
 
 
 @dataclass

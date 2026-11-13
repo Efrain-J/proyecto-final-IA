@@ -10,7 +10,7 @@ the best rule.
 
 Flags: ``--scenarios`` years (default 2025), ``--presets`` (default all), ``--workers``
 (default min(jobs, cpu_count); 1 = sequential), ``--max-epochs``, ``--seed``,
-``--shift-draws`` (default 5), ``--mix`` (default ``default``), ``--prices`` CSV, ``--out``
+``--shift-draws`` (default 10), ``--mix`` (default ``default``), ``--prices`` CSV, ``--out``
 directory. Jobs are independent and each seed depends only on (base seed, preset, year),
 so results do not depend on workers or job order.
 """
@@ -55,7 +55,7 @@ from energy.rl.simulate import DEFAULT_POLICIES_DIR, simulate
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SHIFT_DRAWS = 5
+DEFAULT_SHIFT_DRAWS = 10  # tuned on validation for the 8 h battery, see D15
 # Rules Q-learning is compared with, in tie-break order (D15).
 RULE_NAMES = ("shift_schedule", "price_threshold", "night_day")
 

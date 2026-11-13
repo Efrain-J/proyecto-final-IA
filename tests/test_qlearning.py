@@ -73,7 +73,7 @@ def _savings(policy, frame, preset=P2) -> float:
 
 def test_qconfig_defaults():
     cfg = QConfig()
-    assert (cfg.max_epochs, cfg.alpha, cfg.gamma) == (300, 0.1, 0.99)
+    assert (cfg.max_epochs, cfg.alpha, cfg.gamma, cfg.alpha_end) == (300, 0.1, 0.995, 0.005)
     assert (cfg.epsilon_start, cfg.epsilon_end) == (1.0, 0.05)
     assert (cfg.patience, cfg.episode_hours, cfg.seed) == (20, 168, 0)
 

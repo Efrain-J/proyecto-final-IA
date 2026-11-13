@@ -304,6 +304,46 @@ That matches the prototype, with a spread of about ±0.03 between seeds.
 
 **One test pattern varies a lot.** On test pattern 1000, 8 h, Q-learning beats the price rule by only 1.6%, so per-pattern results vary. Report the mean over patterns.
 
+**Parameter tuning (2026-11-13), adopted.** Run with `uv run python -m energy.eval.tune_q`; the outputs are in `results/tuning/q_8h_2025_*`.
+
+*Method:* the test months are never used to choose.
+- Train on January–June and score on July–September, over 5 validation shift patterns (seeds 2000–2004).
+- The score is Q-learning ÷ the tuned price rule, with 4 training seeds per configuration.
+- Stage 1 changes one parameter at a time. Stage 2 combines the ones that gained at least 1%.
+- Only then are the default and the winner retrained on January–September and tested **once** on October–December.
+
+*Validation, 8 h battery:*
+
+| Change | Effect on the score |
+|---|---|
+| γ 0.995 | +4.6% |
+| 10 shift patterns | +2.6% |
+| α ending at 0.005 | +2.0% |
+| starting α 0.2 | +1.7% |
+| 600 passes | −1.0% (no run stops early) |
+| final ε 0.01 or 0.15 | −2 to −3% |
+| γ 0.95 | −41%: the policy collapses, because an 8 h battery needs to look further ahead |
+| **All three best combined** | **+6.1%** |
+
+*Test, 8 h, 4 seeds:*
+- Q-learning ÷ best rule goes from 1.03 (seeds 0.96–1.07) to **1.07** (1.05–1.09).
+- Q-learning ÷ perfect foresight goes from 67% to 70%.
+- The noise between seeds is about ±4%, so the test gain alone isn't conclusive. The validation gain is consistent, though: every tuned seed beats the default's average.
+
+*Adopted as defaults:* `QConfig.gamma` = 0.995 and `alpha_end` = 0.005, plus `DEFAULT_SHIFT_DRAWS` = 10. A job now takes about 30 s, and the three run in 31 s in parallel.
+
+*Retrained on all presets,* test October–December, Q-learning ÷ best rule for seeds 0 / 1 / 2:
+
+| Battery | Seed 0 | Seed 1 | Seed 2 | Mean | Mean before |
+|---|---|---|---|---|---|
+| 4 h | 0.99 | 1.00 | 1.00 | **1.00** | 0.99 |
+| 8 h | 1.05 | 1.08 | 1.07 | **1.07** | 1.05 |
+| 12 h | 1.15 | 1.09 | 1.09 | **1.11** | 1.06 |
+
+Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8 h only, and they also helped 12 h.
+
+**Small side effect:** the tuned price rule's cut-offs depend on the training shift patterns. For 4 h, seed 0 now picks worse cut-offs (2.09 M against 2.50 M). The 4 h comparison isn't affected, because the shift schedule is the best rule there.
+
 ## D10. Call XM's API directly instead of `pydataxm`
 
 **Status:** Decided (2026-11-12)
@@ -398,6 +438,7 @@ Until then, nothing reads the CSV.
 - On 2025, Q-learning earns 95–97% of a simple fixed schedule. With such a regular daily price pattern, learning adds little over a well-chosen rule (D14).
 - **Branch `explore/factory-schedule` (D15):**
   - The factory's shift schedule is synthetic (A5), and the factory's load is all or nothing.
-  - Q-learning's edge over the best tuned rule is modest (+4–6% for 6–12 h batteries).
-  - Q-learning reaches only 65–70% of perfect foresight.
+  - Q-learning's edge over the best tuned rule is modest: +7% for 8 h and +11% for 12 h after parameter tuning, and a tie for 4 h.
+  - Q-learning reaches only 69–74% of perfect foresight.
+  - The parameters were tuned on the 8 h battery only.
 - This is an academic prototype, not financial, legal or regulatory advice.
