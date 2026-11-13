@@ -1,8 +1,9 @@
 .vscode
 __pycache__
 test.*
-data/
+docs/
 .pytest_cache
 .claude/
 *.pdf
 .env
+.venv/

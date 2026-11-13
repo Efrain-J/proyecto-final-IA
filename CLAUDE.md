@@ -4,9 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Final project for EAFIT SI3003 (Inteligencia Artificial), 2026. The full assignment is in `EAFIT_Proyecto_Final_IA.md` (Spanish); it is the source of truth for requirements and grading. **Hard deadline: Friday 2026-11-13, 6:00 p.m.** — code freeze, README, agent evaluation and AI-use declaration all due then.
+Final project for EAFIT SI3003 (Inteligencia Artificial), 2026. The full assignment is in `EAFIT_Proyecto_Final_IA.md` (Spanish); it is the source of truth for requirements and grading. **Hard deadline: Monday 2026-11-16** (moved from Friday 2026-11-13; confirm the exact hour)
+
+Chosen scenario: **3.3 (battery dispatch with an MDP + regulation RAG assistant)**. Scope decisions, assumptions and open questions are logged in `docs/decisions.md`. Read it before planning work, and add new decisions there. The road map is in `docs/planned_steps.md`: when you finish a step or hit an obstacle, note it under that step. — code freeze, README, agent evaluation and AI-use declaration all due then.
 
 The repo currently has no code. As the code is written, update this file with the real build/run/test commands and the architecture.
+
+## Environment
+
+Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` and `uv.lock`.
+
+- Install: `uv sync` (fallback: `python -m venv .venv` + `pip install -r requirements.txt`)
+- Run anything: `uv run <cmd>`, e.g. `uv run streamlit run app.py`
+- Add a dependency: `uv add <pkg>`, **then always regenerate** `requirements.txt` (a required deliverable): `uv export --no-hashes --no-dev -o requirements.txt`. Never edit `requirements.txt` by hand.
 
 ## Guiding principle: MVP first
 
@@ -19,7 +29,7 @@ The user's explicit priority, and the assignment's: **a small scope that works e
 
 ## Required components (all must be present)
 
-1. **Real Colombian data** (SIATA, IDEAM, AMVA, XM, INS/SIVIGILA, datos.gov.co, Kaggle…), source documented and cited, with a downloaded-historical plan B. `data/` is gitignored, so the README must include instructions/scripts to obtain the data.
+1. **Real Colombian data** (SIATA, IDEAM, AMVA, XM, INS/SIVIGILA, datos.gov.co, Kaggle…), source documented and cited, with a downloaded-historical plan B. `data/` is tracked in git (keep files small); still keep the download script and document it in the README.
 2. **Part 1 classical technique implemented by the team** (A*, CSP, MDP/RL, Bayesian network, HMM, or classical ML) — not just a library call that solves it — with a **quantitative metric vs. a baseline**.
 3. **LLM agent with RAG** over a relevant corpus and **at least two tools** (tool calling). Manual agentic loop or LangGraph. Must cap iterations (`T_max`) and cite sources. The Part 1 model must be integrated non-trivially (typically exposed as one of the agent's tools).
 4. **Dashboard** with ≥2 meaningful visualizations, user-selectable parameters (station, municipality, date, scenario), and a chat with the agent.
@@ -36,6 +46,10 @@ When a task requires downloading data (APIs, open-data portals, station/historic
 - Keep download scripts idempotent and resumable: skip files that already exist in `data/` and write each file atomically.
 - Fall back to the sequential path or the local CSV snapshot if the parallel version fails, so the app keeps running (MVP first).
 - Keep the scripts runnable from the README with a single command.
+
+## Git tree
+
+Don't commit without the users authorization.
 
 ## Stack
 
