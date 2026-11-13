@@ -46,6 +46,7 @@ We don't use IDEAM solar radiation and don't model solar panels. That removes on
 **Status:** Decided (2026-11-12; updated from "one year"; split changed 2026-11-13)
 
 - Hourly national bolsa price (`PrecBolsNaci`, entity `Sistema`, COP/kWh) for **2024-01-01 to 2025-12-31**: 17,544 hours, with no gaps. No demand data, since A2 makes it unnecessary.
+- **Scenario 2024 trained (2026-11-13),** together with a cross-year transfer check: tables trained on one year and tested on the other (see D15).
 - **Split (changed 2026-11-13): two scenarios, each trained and tested within one year.** Train on January–September and test on October–December, split by date, so the agent is never tested on weeks it trained on. **Scenario 2025 comes first.** Scenario 2024 (the El Niño drought) repeats the same setup as a stress test. *Previously:* train on 2024 and test on 2025. We dropped that because it mixes two very different price regimes into a single test, and the within-year version gives each year its own result.
 - Snapshot: `data/processed/prices_hourly.csv` (`timestamp`, `price_cop_kwh`), with the raw monthly JSON in `data/raw/xm/`. Both are committed, which is the plan B if the API is down.
 
@@ -342,6 +343,34 @@ That matches the prototype, with a spread of about ±0.03 between seeds.
 
 Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8 h only, and they also helped 12 h.
 
+**Scenario 2024 and cross-year transfer (2026-11-13).** `uv run python -m energy.rl.train --scenarios 2024` trains on January–September 2024, writing `q_*_2024` and `threshold_*_2024`. The tables were then crossed: each year's tables tested on October–December of both years, over the 5 test shift patterns, training seed 0. The script is in the scratchpad and not yet in the repo.
+
+**Compare against the strongest rule.** The price rule's cut-offs don't carry over well across a regime change. Cut-offs tuned on January–September 2024 did worse on October–December 2024 than cut-offs tuned on 2025 (8 h: 8.06 M against 9.67 M). Against the weaker 2024 rule, Q-learning on 8 h looked +33% better, which would mislead. So the cross-year metric is **Q-learning ÷ the strongest rule available**: the shift schedule, the fixed schedule, or either tuned price rule.
+
+**Q-learning ÷ strongest rule:**
+
+| Battery | Trained on | Test Oct–Dec 2024 | Test Oct–Dec 2025 |
+|---|---|---|---|
+| 4 h | 2024 | 0.91 | 0.95 |
+| 4 h | 2025 | 0.83 | 0.99 |
+| 8 h | 2024 | 1.10 | 1.06 |
+| 8 h | 2025 | 1.02 | 1.05 |
+| 12 h | 2024 | 1.00 | 1.07 |
+| 12 h | 2025 | 1.15 | 1.15 |
+
+**Savings, October–December 2024 (COP):**
+
+| Battery | Q (trained 2024) | Q (trained 2025) | Price rule (2024 / 2025 cut-offs) | Shift schedule | Perfect foresight |
+|---|---|---|---|---|---|
+| 8 h | 10.68 M | 9.85 M | 8.06 M / 9.67 M | 6.92 M | 18.76 M |
+| 12 h | 11.28 M | 13.00 M | 9.37 M / 11.29 M | 6.14 M | 22.33 M |
+
+**Findings:**
+- **The relative-price state carries over between years.** Tables trained on 2025's calm prices do well in the 2024 drought crisis, and the reverse holds too. For 12 h, the 2025 table even beats the 2024 one on 2024.
+- **Crisis months are harder for every causal policy.** In October–December 2024 Q-learning captures 50–58% of perfect foresight, against about 70% in 2025: price spikes reward only foresight. Savings in COP are 3–4× higher in 2024.
+- **4 h:** the shift schedule wins in every case, and by more in 2024 (Q-learning 0.83–0.91).
+- **Caveat:** this uses a single training seed, and seed noise was about ±4% in 2025.
+
 **Small side effect:** the tuned price rule's cut-offs depend on the training shift patterns. For 4 h, seed 0 now picks worse cut-offs (2.09 M against 2.50 M). The 4 h comparison isn't affected, because the shift schedule is the best rule there.
 
 ## D10. Call XM's API directly instead of `pydataxm`
@@ -441,4 +470,6 @@ Until then, nothing reads the CSV.
   - Q-learning's edge over the best tuned rule is modest: +7% for 8 h and +11% for 12 h after parameter tuning, and a tie for 4 h.
   - Q-learning reaches only 69–74% of perfect foresight.
   - The parameters were tuned on the 8 h battery only.
+  - In the October–December 2024 crisis, Q-learning captures only 50–58% of perfect foresight.
+  - The tuned price rule's cut-offs don't carry over well across a regime change, so results are compared against the strongest available rule.
 - This is an academic prototype, not financial, legal or regulatory advice.

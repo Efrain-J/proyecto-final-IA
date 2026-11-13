@@ -68,6 +68,12 @@ Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/po
 - **Result:** Q-learning ÷ best rule is now 1.00 for 4 h, 1.07 for 8 h and 1.11 for 12 h (D15).
 - The γ that worked best, 0.995, was the highest value tried; a higher one might do better still.
 
+**Scenario 2024 and cross-year transfer (2026-11-13):**
+- `--scenarios 2024` trained the 2024 tables, and each year's tables were tested on October–December of both years.
+- **Transfer works,** thanks to the relative price state: for 8 h and 12 h, Q-learning ÷ the strongest rule is 1.00–1.15 in every combination. For 4 h the shift schedule always wins.
+- **Obstacle:** the price rule tuned on January–September 2024 was weak on October–December 2024, which made Q-learning look 33% better than it is. We now compare against the strongest available rule (D15).
+- **Still to do:** move the cross-year script from the scratchpad into `energy/eval/`, with a CSV in `results/`.
+
 ## 3. Simulation tool
 
 Wrap the trained policy in `simulate(policy, dates)` so it returns the decisions and savings for a date range. The dashboard and the agent both use it.

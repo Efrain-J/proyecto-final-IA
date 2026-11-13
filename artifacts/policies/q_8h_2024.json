@@ -1,0 +1,1 @@
+{"preset_id": "8h", "name": "q_learning", "edges": [0.9102618471244563, 1.0371405796166975, 1.1533810586579896], "metadata": {"year": 2024, "epochs_run": 300, "seed": 995847205, "shift_mix": "default", "shift_draws": 10}}
