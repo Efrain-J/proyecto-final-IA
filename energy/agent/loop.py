@@ -29,6 +29,7 @@ from energy import config
 from energy.agent.llm import ChatFn, LLMError, make_groq_chat
 from energy.agent.prompts import REFUSAL, system_prompt
 from energy.agent.render import render_results
+from energy.agent.settings import UserSettings
 from energy.agent.tools import Tool, build_registry, run_tool, tool_schemas
 from energy.rag.retrieve import Retriever, open_retriever
 
@@ -48,6 +49,7 @@ class ToolCallRecord:
     arguments: dict[str, Any]
     ok: bool
     error: str | None = None
+    from_settings: tuple[str, ...] = ()  # arguments filled from the user's settings (D16)
 
 
 @dataclass
@@ -146,12 +148,39 @@ def _fallback_answer(error: Exception, registry: dict[str, Tool], question: str)
     return "\n".join(lines)
 
 
+def _fill_from_settings(raw: str, settings: UserSettings) -> tuple[str, tuple[str, ...]]:
+    """Fill the omitted ``simulate_battery`` arguments from the user's settings (D16).
+
+    Dates are filled only as a pair, so one date alone reaches the tool and comes back as
+    an error the model can fix. Unparseable arguments are left for ``run_tool`` to reject.
+
+    Returns:
+        The (re-serialized) arguments and the names that were filled.
+    """
+    try:
+        args = json.loads(raw) if raw and raw.strip() else {}
+    except json.JSONDecodeError:
+        return raw, ()
+    if not isinstance(args, dict):
+        return raw, ()
+    filled: list[str] = []
+    if "preset" not in args:
+        args["preset"] = settings.preset
+        filled.append("preset")
+    if "start_date" not in args and "end_date" not in args:
+        args["start_date"] = settings.start.isoformat()
+        args["end_date"] = settings.end.isoformat()
+        filled += ["start_date", "end_date"]
+    return json.dumps(args), tuple(filled)
+
+
 def run_agent(
     question: str,
     history: list[dict],
     registry: dict[str, Tool],
     chat: ChatFn,
     t_max: int = config.T_MAX,
+    settings: UserSettings | None = None,
 ) -> AgentResult:
     """Answer one question with tool calling.
 
@@ -162,11 +191,13 @@ def run_agent(
         registry: Tools by name.
         chat: The model.
         t_max: Maximum tool rounds.
+        settings: The user's battery and period; None means the config defaults.
 
     Returns:
         The result; it never raises.
     """
-    messages: list[dict] = [{"role": "system", "content": system_prompt()}]
+    settings = settings or UserSettings()
+    messages: list[dict] = [{"role": "system", "content": system_prompt(settings)}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history[-config.HISTORY_MESSAGES :]]
     messages.append({"role": "user", "content": question})
     schemas = tool_schemas(registry)
@@ -194,14 +225,23 @@ def run_agent(
                 }
             )
             for call in reply.tool_calls:
-                raw, parsed = run_tool(registry, call.name, call.arguments)
+                call_args, from_settings = call.arguments, ()
+                if call.name == "simulate_battery":
+                    call_args, from_settings = _fill_from_settings(call.arguments, settings)
+                raw, parsed = run_tool(registry, call.name, call_args)
                 try:
-                    arguments = json.loads(call.arguments)
+                    arguments = json.loads(call_args)
                 except json.JSONDecodeError:
                     arguments = {}
                 error = parsed.get("error") if isinstance(parsed, dict) else None
                 records.append(
-                    ToolCallRecord(call.name, arguments if isinstance(arguments, dict) else {}, error is None, error)
+                    ToolCallRecord(
+                        call.name,
+                        arguments if isinstance(arguments, dict) else {},
+                        error is None,
+                        error,
+                        from_settings,
+                    )
                 )
                 if call.name == "simulate_battery" and error is None:
                     simulations.append(parsed)

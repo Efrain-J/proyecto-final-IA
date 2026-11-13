@@ -106,6 +106,8 @@ def test_policy_names_cover_every_policy_id():
 # when present, are their own paragraphs between the sentence and the Supuestos.
 GOLDEN = "\n".join(
     [
+        "Escenario: batería de 8 h · 2025-10-06 a 2025-10-19 · Q-learning",
+        "",
         "**Ahorro promedio: 3.131.506 COP (rango mín–máx: 2.900.000 a 3.300.000 COP) "
         "según el calendario de turnos (5 calendarios simulados)**",
         "",
@@ -129,8 +131,26 @@ def test_render_simulation_golden_string():
     assert render_simulation(make_result()) == GOLDEN
 
 
-def test_first_line_is_the_bold_savings_line():
-    first = render_simulation(make_result()).splitlines()[0]
+def test_first_line_is_the_scenario_line():
+    out = render_simulation(make_result())
+    assert out.splitlines()[0] == "Escenario: batería de 8 h · 2025-10-06 a 2025-10-19 · Q-learning"
+    assert out.splitlines()[1] == ""
+
+
+def test_scenario_line_names_battery_period_label_and_policy():
+    out = render_simulation(
+        make_result(
+            preset="12h",
+            policy="price_threshold",
+            policy_used="price_threshold",
+            period={"start": "2025-10-01", "end": "2025-12-31"},
+        )
+    )
+    assert out.splitlines()[0] == "Escenario: batería de 12 h · oct–dic 2025 · Regla de umbral de precio"
+
+
+def test_bold_savings_line_follows_the_scenario_line():
+    first = render_simulation(make_result()).splitlines()[2]
     assert first == (
         "**Ahorro promedio: 3.131.506 COP (rango mín–máx: 2.900.000 a 3.300.000 COP) "
         "según el calendario de turnos (5 calendarios simulados)**"

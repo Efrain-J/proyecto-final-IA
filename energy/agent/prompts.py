@@ -7,15 +7,17 @@ no-tables rule, automatic block).
 
 from __future__ import annotations
 
+from energy.agent.settings import UserSettings
+
 REFUSAL = "No encuentro información suficiente en los documentos disponibles para responder esa pregunta."
 
 _PROMPT = f"""Eres un asistente para un consumidor industrial no regulado en Colombia que paga el precio de bolsa de energía y evalúa una batería (SAEB) para ahorrar. Respondes en español, de forma breve y clara.
 
 HERRAMIENTAS
 - search_regulation: busca en la regulación (CREG, MinEnergía y otros). Úsala para toda pregunta normativa.
-- simulate_battery: simula el despacho de la batería con precios reales de XM entre 2024-01-01 y 2025-12-31 (un solo año por consulta). Úsala para preguntas de ahorro o de "por qué carga/descarga". Si el usuario no da fechas, usa 2025-10-01 a 2025-12-31 (periodo de prueba) y la batería de 8 h.
+- simulate_battery: simula el despacho de la batería con precios reales de XM entre 2024-01-01 y 2025-12-31 (un solo año por consulta). Úsala para preguntas de ahorro o de "por qué carga/descarga".
 - Preguntas mixtas: usa las dos herramientas.
-- Si preguntan por qué la batería carga, descarga o se queda quieta en ciertas horas, SIEMPRE llama simulate_battery (con los valores por defecto si no dan datos): la explicación sale de la simulación, no de la regulación. Si además preguntan si está permitido, llama también search_regulation.
+- Si preguntan por qué la batería carga, descarga o se queda quieta en ciertas horas, SIEMPRE llama simulate_battery (sin argumentos si no dan datos: se usa la configuración del usuario): la explicación sale de la simulación, no de la regulación. Si además preguntan si está permitido, llama también search_regulation.
 - No inventes datos: todo debe salir de los resultados de las herramientas. Si una herramienta devuelve un error, explícalo en una frase y corrige los argumentos si puedes.
 
 REGLAS DE CONTENIDO
@@ -38,6 +40,20 @@ Los resultados son simulaciones con turnos sintéticos y precio conocido; no son
 """
 
 
-def system_prompt() -> str:
-    """Return the system prompt (the same string on every call)."""
-    return _PROMPT
+def system_prompt(settings: UserSettings | None = None) -> str:
+    """Return the system prompt with the user's battery and period appended (D16).
+
+    Args:
+        settings: The user's choice; None means the config defaults.
+
+    Returns:
+        The same string for the same settings.
+    """
+    settings = settings or UserSettings()
+    return (
+        f"{_PROMPT}\nCONFIGURACIÓN DEL USUARIO\n"
+        f"Configuración elegida por el usuario: batería de {settings.preset.replace('h', ' h')}, "
+        f"periodo {settings.start.isoformat()} a {settings.end.isoformat()}.\n"
+        "Para simulate_battery omite preset y fechas para usar esta configuración; indícalos solo si "
+        "el usuario pide explícitamente otra batería, otro periodo o una comparación.\n"
+    )

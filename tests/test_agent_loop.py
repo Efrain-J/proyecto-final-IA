@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from datetime import date
 
 import pytest
 
@@ -19,6 +20,7 @@ from energy.agent.llm import ChatReply, LLMError, ToolCall
 from energy.agent.loop import AgentResult, ToolCallRecord, open_agent, run_agent
 from energy.agent.prompts import REFUSAL, system_prompt
 from energy.agent.render import cop
+from energy.agent.settings import UserSettings
 from energy.agent.tools import build_registry
 from energy.data.prices import load_prices
 from energy.rag.retrieve import Hit
@@ -174,9 +176,10 @@ def test_simulation_block_comes_first_then_the_model_text(registry):
     assert result.stopped == "answer"
     assert len(result.simulations) == 1
     assert result.model_text == text
-    assert result.results_block.startswith("**Ahorro promedio: ")
+    assert result.results_block.startswith("Escenario: ")
+    assert "**Ahorro promedio: " in result.results_block
     assert result.answer == result.results_block + "\n\n" + text
-    assert result.answer.startswith("**Ahorro promedio:")
+    assert result.answer.startswith("Escenario:")
 
 
 def test_block_numbers_equal_the_tool_output_exactly(registry):
@@ -240,7 +243,8 @@ def test_llm_error_after_a_simulation_still_shows_the_block(registry):
     chat = ScriptedChat([ChatReply(None, [ask_sim()]), LLMError("caído")])
     result = run_agent("simula eficiencia", [], registry, chat)
     assert result.stopped == "llm_error"
-    assert result.results_block.startswith("**Ahorro promedio:")
+    assert result.results_block.startswith("Escenario:")
+    assert "**Ahorro promedio:" in result.results_block
     assert result.answer.startswith(result.results_block)
     assert "caído" in result.model_text or "No pude consultar" in result.model_text
 
@@ -458,10 +462,125 @@ def test_real_groq_simulation_question_answers_with_the_results_block():
     )
     assert result.stopped == "answer"
     assert any(call.name == "simulate_battery" and call.ok for call in result.tool_calls)
-    assert result.answer.startswith("**Ahorro promedio:")
+    assert result.answer.startswith("Escenario:")
+    assert "**Ahorro promedio:" in result.answer
     assert HEADER in result.answer
     assert SOURCE_LINE.split(",")[0] in result.answer  # year depends on the question
     assert cop(result.simulations[0]["savings_cop"]["mean"]) in result.answer
+
+
+@pytest.mark.network
+def test_real_groq_uses_the_user_settings_when_the_question_names_none():
+    config.load_env()
+    if not os.environ.get("GROQ_API_KEY"):
+        pytest.skip("GROQ_API_KEY is not set")
+    registry, chat = open_agent()
+    settings = UserSettings("12h", date(2024, 10, 1), date(2024, 12, 31))
+    result = run_agent("¿Cuánto ahorro?", [], registry, chat, settings=settings)
+    assert result.stopped == "answer"
+    sims = [c for c in result.tool_calls if c.name == "simulate_battery" and c.ok]
+    assert sims
+    # The outcome, not how it got there: a model may omit the arguments (filled from the
+    # settings) or copy them from the prompt; either way it must simulate the user's battery.
+    assert sims[0].arguments["preset"] == "12h"
+    assert (sims[0].arguments["start_date"], sims[0].arguments["end_date"]) == ("2024-10-01", "2024-12-31")
+    assert "12 h" in result.results_block
+
+
+# --- the user's settings drive simulate_battery (D16, option A) ------------------
+
+SETTINGS = UserSettings("4h", date(2025, 10, 6), date(2025, 10, 19))
+
+
+def ask_bare(id_: str = "s1", **args) -> ToolCall:
+    """A simulate_battery call with only the given arguments (the model omitted the rest)."""
+    return ToolCall(id_, "simulate_battery", json.dumps(args))
+
+
+def test_omitted_arguments_are_filled_from_the_settings(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_bare()]), say("Explicación.")])
+    result = run_agent("¿Cuánto ahorro?", [], registry, chat, settings=SETTINGS)
+    (record,) = result.tool_calls
+    assert record.ok
+    assert record.arguments["preset"] == "4h"
+    assert record.arguments["start_date"] == "2025-10-06"
+    assert record.arguments["end_date"] == "2025-10-19"
+    assert record.from_settings == ("preset", "start_date", "end_date")
+    (sim,) = result.simulations
+    assert sim["preset"] == "4h"
+    assert sim["period"] == {"start": "2025-10-06", "end": "2025-10-19"}
+    assert "batería de 4 h" in result.results_block
+
+
+def test_explicit_preset_wins_but_dates_are_still_filled(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_bare(preset="12h")]), say("Explicación.")])
+    settings = UserSettings("8h", date(2025, 10, 6), date(2025, 10, 19))
+    result = run_agent("¿y con 12 h?", [], registry, chat, settings=settings)
+    (record,) = result.tool_calls
+    assert record.ok
+    assert record.arguments["preset"] == "12h"
+    assert "preset" not in record.from_settings
+    assert record.from_settings == ("start_date", "end_date")
+    assert result.simulations[0]["preset"] == "12h"
+
+
+def test_explicit_dates_are_not_overridden(registry):
+    chat = ScriptedChat(
+        [ChatReply(None, [ask_bare(start_date="2025-11-03", end_date="2025-11-16")]), say("Listo.")]
+    )
+    result = run_agent("noviembre", [], registry, chat, settings=SETTINGS)
+    (record,) = result.tool_calls
+    assert record.from_settings == ("preset",)
+    assert result.simulations[0]["period"] == {"start": "2025-11-03", "end": "2025-11-16"}
+    assert result.simulations[0]["preset"] == "4h"
+
+
+def test_only_one_date_is_not_filled_and_the_error_goes_back(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_bare(start_date="2025-10-06")]), say("Faltó una fecha.")])
+    result = run_agent("simula", [], registry, chat, settings=SETTINGS)
+    assert result.stopped == "answer"
+    (record,) = result.tool_calls
+    assert record.ok is False
+    assert "start_date" not in record.from_settings and "end_date" not in record.from_settings
+    assert "end_date" not in record.arguments
+    (tool_msg,) = [m for m in chat.calls[1][0] if m["role"] == "tool"]
+    assert "error" in json.loads(tool_msg["content"])
+    assert result.simulations == []
+
+
+def test_without_settings_the_config_defaults_are_used(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_bare()]), say("Explicación.")])
+    result = run_agent("¿Cuánto ahorro?", [], registry, chat)  # one 3-month simulation
+    (record,) = result.tool_calls
+    assert record.ok
+    assert record.arguments["preset"] == config.DEFAULT_PRESET
+    assert record.arguments["start_date"] == config.DEFAULT_START.isoformat()
+    assert record.arguments["end_date"] == config.DEFAULT_END.isoformat()
+    assert record.from_settings == ("preset", "start_date", "end_date")
+
+
+def test_system_message_carries_the_settings(registry):
+    chat = ScriptedChat([say("ok")])
+    run_agent("hola", [], registry, chat, settings=SETTINGS)
+    content = chat.calls[0][0][0]["content"]
+    assert content == system_prompt(SETTINGS)
+    assert "4 h" in content and "2025-10-06" in content and "2025-10-19" in content
+
+
+def test_two_explicit_presets_still_give_the_comparison(registry):
+    calls = [ask_bare("a", preset="4h"), ask_bare("b", preset="12h")]
+    chat = ScriptedChat([ChatReply(None, calls), say("Explicación.")])
+    result = run_agent("compara 4 y 12 h", [], registry, chat, settings=SETTINGS)
+    assert [s["preset"] for s in result.simulations] == ["4h", "12h"]
+    assert COMPARISON_HEADER in result.results_block
+
+
+def test_search_regulation_calls_take_nothing_from_the_settings(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_search()]), say(f"Eficiencia [{CITA}].")])
+    result = run_agent("eficiencia", [], registry, chat, settings=SETTINGS)
+    (record,) = result.tool_calls
+    assert record.from_settings == ()
+    assert record.arguments == {"query": "eficiencia"}
 
 
 def test_model_never_sees_the_figures_shown_in_the_block(registry):

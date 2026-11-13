@@ -111,8 +111,12 @@ def test_tool_schemas_follow_openai_format(registry):
 def test_schema_required_arguments(registry):
     by_name = {s["function"]["name"]: s["function"]["parameters"] for s in tool_schemas(registry)}
     assert "query" in by_name["search_regulation"]["required"]
-    assert {"start_date", "end_date"} <= set(by_name["simulate_battery"]["required"])
-    assert "policy" not in by_name["simulate_battery"]["required"]
+    assert by_name["simulate_battery"]["required"] == []  # the loop fills them from the settings
+
+
+def test_run_tool_without_dates_names_the_missing_arguments(registry):
+    _, parsed = run_tool(registry, "simulate_battery", json.dumps({"preset": "8h"}))
+    assert "start_date" in parsed["error"] and "end_date" in parsed["error"]
 
 
 # --- run_tool never raises ---------------------------------------------------

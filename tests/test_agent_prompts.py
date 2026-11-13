@@ -6,9 +6,12 @@ rules, the no-tables rule), so the rest of the wording stays free. Run with
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from energy.agent.prompts import REFUSAL, system_prompt
+from energy.agent.settings import UserSettings
 
 
 def test_refusal_phrase_is_exact():
@@ -53,3 +56,23 @@ def test_prompt_is_written_in_spanish(prompt):
 
 def test_system_prompt_is_stable_between_calls():
     assert system_prompt() == system_prompt()
+
+
+def test_prompt_states_the_user_settings():
+    text = system_prompt(UserSettings("12h", date(2024, 10, 1), date(2024, 12, 31)))
+    assert "12 h" in text
+    assert "2024-10-01" in text
+    assert "2024-12-31" in text
+
+
+def test_default_prompt_states_the_default_settings(prompt):
+    assert "8 h" in prompt
+    assert "2025-10-01" in prompt
+
+
+def test_old_default_sentence_is_gone(prompt):
+    assert "Si el usuario no da fechas" not in prompt
+
+
+def test_none_settings_equal_no_argument():
+    assert system_prompt(None) == system_prompt()

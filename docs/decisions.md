@@ -426,6 +426,20 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
   - **Citations are checked on the model's text only.**
   - **`AgentResult` gained** `simulations`, `results_block` and `model_text`.
 - **Regulation answers:** short paragraphs ending in citations, then a "no es asesoría legal" line.
+- **The user's battery and period are the default** (option A, decided 2026-11-13):
+  - **Why:** in the dashboard the user picks the battery (4 / 8 / 12 h) and the dates in the sidebar, and the chat must answer for the same scenario the charts show.
+  - **`UserSettings(preset, start, end)`** lives in `energy/agent/settings.py`. It defaults to 8 h, 2025-10-01..2025-12-31 (`config.DEFAULT_*`), and it is validated: a known preset, start ≤ end, one calendar year, inside the data. `run_agent(..., settings=...)` takes it.
+  - **Filled by code:** when the model omits `preset`, the loop fills it from the settings. It fills `start_date` and `end_date` only when both are missing; if one is given alone, the tool's error goes back to the model. `ToolCallRecord.from_settings` records which arguments were filled.
+  - **The prompt states the settings,** and says to use another battery or period only when the user asks explicitly, which keeps comparisons working. The results block opens with `Escenario: batería de 12 h · oct–dic 2024 · Q-learning`, so the scenario is always visible.
+  - **The tool's schema no longer requires dates.** The function still rejects a call without them, with a Spanish error.
+- **Groq daily limit (found 2026-11-13):**
+  - **The limit:** on the free tier, `gpt-oss-120b` allows about 200,000 tokens per day, and a question uses about 3–4k. Development and test runs used it up, and every call then fell back to `gpt-oss-20b`.
+  - **What the 20b model got wrong:**
+    - It passed `preset` explicitly instead of leaving it to the settings.
+    - Its explanations were weaker; one mixed up the price quartiles.
+  - **The figures stayed correct,** because the results block is rendered by code.
+  - **Consequence:** the network test now checks that the user's battery and dates were simulated, not whether the model omitted the arguments.
+  - **Plan the agent evaluation and the demo around the daily limit.**
 - **Live check:**
   - **What passed:** the regulation, simulation, mixed and trap questions behaved as specified; the network tests passed in 4 out of 4 runs.
   - **The model changed a digit when copying numbers by hand** (2.970.674 instead of 2.974.674). That's why the results block above is written by code.

@@ -14,6 +14,7 @@ and uses only the standard library; ``dotenv`` is imported inside ``load_env``.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +43,10 @@ GROQ_MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b")  # tried in order
 T_MAX = 5  # tool rounds before the agent must answer
 HISTORY_MESSAGES = 6  # earlier chat messages kept in the prompt
 LLM_TIMEOUT_S = 30
+# The user's battery and period when none is chosen (D16): the 2025 test quarter.
+DEFAULT_PRESET = "8h"
+DEFAULT_START = date(2025, 10, 1)
+DEFAULT_END = date(2025, 12, 31)
 
 
 def load_env() -> bool:

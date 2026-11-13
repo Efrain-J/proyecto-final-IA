@@ -87,6 +87,10 @@ def render_simulation(result: dict[str, Any]) -> str:
     base = result["baselines"]
     best_rule = result["best_rule"]
     best, optimum = base[best_rule], base["perfect_foresight"]
+    scenario = (
+        f"Escenario: batería de {result['preset'].replace('h', ' h')} · "
+        f"{_period_label(result['period'])} · {_name(result['policy'])}"
+    )
     head = (
         f"**Ahorro promedio: {cop(mean)} (rango mín–máx: {_plain(low)} a {cop(high)}) "
         f"según el calendario de turnos ({result['shift_patterns']} calendarios simulados)**"
@@ -101,7 +105,7 @@ def render_simulation(result: dict[str, Any]) -> str:
         ]
     )
     sentence = _comparison_sentence(_name(result["policy"]), mean, _name(best_rule), best, optimum)
-    blocks = [head, table, sentence, *_notes(result), f"**Supuestos:** {result['notes']}"]
+    blocks = [scenario, head, table, sentence, *_notes(result), f"**Supuestos:** {result['notes']}"]
     blocks.append(f"*Fuente: simulación propia con precios de bolsa de XM, {_year(result)}.*")
     return "\n\n".join(b for b in blocks if b)
 

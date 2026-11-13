@@ -262,7 +262,7 @@ def tool_schemas(registry) -> list[dict]                     # OpenAI tools form
 def run_tool(registry, name, raw_args) -> tuple[str, dict]   # never raises: {"error": ...}
 
 # loop.py
-ToolCallRecord(name, arguments, ok, error)
+ToolCallRecord(name, arguments, ok, error, from_settings)   # arguments as used, after filling
 AgentResult(answer, tool_calls, citations, unverified_citations,
             stopped: Literal["answer", "t_max", "llm_error"], retriever,
             simulations, results_block, model_text)   # answer = results_block + model_text
@@ -270,7 +270,11 @@ AgentResult(answer, tool_calls, citations, unverified_citations,
 # render.py (pure)
 def cop(x) -> str; def pct(x) -> str; POLICY_NAMES
 def render_results(results: list[dict]) -> str   # "" | render_simulation | render_comparison
-def run_agent(question, history, registry, chat, t_max=config.T_MAX) -> AgentResult   # never raises
+def run_agent(question, history, registry, chat, t_max=config.T_MAX,
+              settings: UserSettings | None = None) -> AgentResult   # never raises
+
+# settings.py
+UserSettings(preset="8h", start=2025-10-01, end=2025-12-31)   # frozen, validated; the sidebar builds it
 def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the eval call this
 ```
 
@@ -282,7 +286,8 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
   - a citation repair round when a search returned hits but the answer has no valid citation
   - `LLMError` gives a retrieval-only answer
 - **Settings in `config`:** `GROQ_MODELS`, `T_MAX`, `HISTORY_MESSAGES` (6) and `LLM_TIMEOUT_S` (30).
-- **Manual check:** `uv run python -m energy.agent "pregunta" [--bm25] [--t-max N]`.
+- **User settings:** the battery and period default to the user's `UserSettings`. Missing `simulate_battery` arguments are filled by the loop, and the prompt states the settings.
+- **Manual check:** `uv run python -m energy.agent "pregunta" [--preset 8h] [--start YYYY-MM-DD --end YYYY-MM-DD] [--bm25] [--t-max N]`.
 - **Testability:** the model is injected (`ChatFn`) and so is the Groq client. Offline tests cover the T_max cap, error observations, the citation check and the repair round. Tests marked `network` call Groq for real.
 
 ## 9. Dashboard (Planned)
@@ -293,7 +298,7 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
   - `@st.cache_data` for the prices and for `simulate(policy_id, preset_id, start, end)` (hashable arguments only).
   - `@st.cache_resource` for the policies, the retriever (exactly one `QdrantClient`, since local mode takes a file lock) and the Groq client.
 - **Sidebar:**
-  - preset, date range, and the policies to compare
+  - preset, date range, and the policies to compare. The preset and dates build one `UserSettings`, which feeds both the charts and `run_agent`, so the chat answers for the scenario on screen.
   - a **status panel**: whether the Groq key is present, and which retriever is in use (`qdrant-nvidia` or `bm25`)
 - **Tabs:**
   1. Price vs. actions over SoC.

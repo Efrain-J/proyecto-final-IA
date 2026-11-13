@@ -197,8 +197,14 @@ def _make_simulate(
         return cache["frames"]
 
     def simulate_battery(
-        start_date: str, end_date: str, policy: str = "q_learning", preset: str = "8h"
+        start_date: str | None = None,
+        end_date: str | None = None,
+        policy: str = "q_learning",
+        preset: str = config.DEFAULT_PRESET,
     ) -> dict[str, Any]:
+        # Not required in the schema: the loop fills them from the user's settings (D16).
+        if start_date is None or end_date is None:
+            raise ToolInputError("Faltan start_date y end_date (formato YYYY-MM-DD).")
         start, end = _parse_date("start_date", start_date), _parse_date("end_date", end_date)
         if start > end:
             raise ToolInputError("start_date no puede ser posterior a end_date.")
@@ -326,17 +332,17 @@ def build_registry(
             "Simula el despacho de una batería con precios de bolsa reales de XM (2024-01-01 a 2025-12-31), "
             "promediando 5 calendarios de turnos sintéticos, y lo compara con reglas fijas y con el óptimo. "
             "Devuelve ahorro en COP y perfiles de decisión por hora y por nivel de precio. "
-            "El rango debe estar en un solo año. Sin fechas del usuario, usa 2025-10-01 a 2025-12-31 (periodo de prueba)."
+            "El rango debe estar en un solo año."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "policy": {"type": "string", "enum": list(POLICY_IDS), "description": "Política a simular (por defecto q_learning)."},
-                "preset": {"type": "string", "enum": sorted(PRESETS), "description": "Batería: 4h, 8h o 12h (por defecto 8h)."},
-                "start_date": {"type": "string", "description": "Primer día, YYYY-MM-DD."},
-                "end_date": {"type": "string", "description": "Último día, YYYY-MM-DD."},
+                "preset": {"type": "string", "enum": sorted(PRESETS), "description": "Batería: 4h, 8h o 12h; omítelo para usar la batería elegida por el usuario."},
+                "start_date": {"type": "string", "description": "Primer día, YYYY-MM-DD; omítelo para usar el periodo elegido por el usuario."},
+                "end_date": {"type": "string", "description": "Último día, YYYY-MM-DD; omítelo para usar el periodo elegido por el usuario."},
             },
-            "required": ["start_date", "end_date"],
+            "required": [],
         },
         fn=_make_simulate(prices, policies_dir),
     )
