@@ -17,6 +17,14 @@ Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` an
 - Install: `uv sync` (fallback: `python -m venv .venv` + `pip install -r requirements.txt`)
 - Run anything: `uv run <cmd>`, e.g. `uv run streamlit run app.py`
 - Add a dependency: `uv add <pkg>`, **then always regenerate** `requirements.txt` (a required deliverable): `uv export --no-hashes --no-dev -o requirements.txt`. Never edit `requirements.txt` by hand.
+- Tests: `uv run pytest` (offline; real-API tests are marked `network` and run with `uv run pytest -m network`)
+
+## Code layout
+
+- `energy/data/io.py`: atomic file writes.
+- `energy/data/xm_prices.py`: XM bolsa prices through the XM API called directly (`pydataxm` is incompatible with pandas 3). `uv run python -m energy.data.xm_prices` writes `data/raw/xm/*.json` and `data/processed/prices_hourly.csv`. It's resumable; `--force` re-downloads.
+- `energy/data/corpus.py`: RAG documents listed in `data/corpus/sources.csv`. `uv run python -m energy.data.corpus` writes to `data/corpus/raw/`.
+- `tests/`: pytest, with HTTP mocked through `httpx.MockTransport`.
 
 ## Guiding principle: MVP first
 
