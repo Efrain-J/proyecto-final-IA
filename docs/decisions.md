@@ -274,7 +274,15 @@ The test on synthetic data checks Q-learning ≥ 90% of the fixed schedule. A th
   - No seasonal pattern.
   - The load is all or nothing: no base load at night (lighting, refrigeration) that would allow some discharge outside shifts.
   - The shift edges are fixed.
-- **Named mixes:** `default` (the one above), `mostly_double` and `mostly_single`. Only `default` is trained. The others show how the trained policy holds up on another factory's pattern, and can be a dashboard setting.
+- **Named mixes:** `default` (the one above), `mostly_double` and `mostly_single`. Only `default` is trained. The others show how the trained policy holds up on another factory's pattern, and can be a dashboard setting. They differ only on weekdays; Saturday and Sunday are as above. Values from `MIXES` in `energy/rl/factory.py`, recorded 2026-11-14:
+
+  | Mix (dashboard label) | Off | Morning 06–14 | Afternoon 14–22 | Full day 06–22 | Expected running hours/week |
+  |---|---|---|---|---|---|
+  | `default` (Mixto) | 10% | 30% | 15% | 45% | ≈ 57 h |
+  | `mostly_double` (Principalmente turnos dobles) | 5% | 10% | 10% | 75% | ≈ 71 h |
+  | `mostly_single` (Principalmente un turno) | 10% | 45% | 35% | 10% | ≈ 43 h |
+
+  The hours are the expectation: 5 weekdays × (8 h × P(morning or afternoon) + 16 h × P(full)), plus 3.2 h for Saturday (40% × 8 h). For `default` that's 5 × 10.8 + 3.2 ≈ 57 h.
 
 **Implemented (2026-11-13), test-first:** a Sonnet agent wrote the tests, and a second one wrote the code to pass them; 359 tests pass. The new module is `energy/rl/factory.py`; `battery`, `policies`, `qlearning`, `simulate` and `train` were extended.
 
@@ -390,7 +398,18 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 - **Mostly double shifts:** Q-learning holds up or does better (+6 to +16% for 8 h and 12 h). More operating hours mean more hours to discharge, which is the situation it learned.
 - **Mostly single shifts:** the edge disappears. For 8 h 2025 and 12 h 2024 Q-learning is slightly below the best price rule (0.97 and 0.95). The training mix has 45% full-shift days, so this mix is outside what the model saw.
 - **4 h:** the shift schedule wins under every mix, as before.
-- **The type of operation matters more than the controller.** For the same battery, savings are about 35–40% higher with mostly double shifts and about 30% lower with mostly single shifts.
+- **The type of operation matters more than the controller.** For the same battery, savings are about 35–40% higher with mostly double shifts and about 30% lower with mostly single shifts. The battery can only discharge while the factory runs, about 71 / 57 / 43 h a week (A5).
+
+*Savings, October–December, mean of the 5 test patterns (M COP), Q-learning / strongest rule:*
+
+| Battery | Test year | Mixto | Principalmente turnos dobles | Principalmente un turno |
+|---|---|---|---|---|
+| 4 h | 2025 | 2.67 / 2.70 | 3.72 / 3.75 | 1.90 / 1.93 |
+| 8 h | 2025 | 3.13 / 2.97 | 4.29 / 3.90 | 2.18 / 2.24 |
+| 12 h | 2025 | 3.52 / 3.07 | 4.72 / 4.22 | 2.53 / 2.26 |
+| 4 h | 2024 | 7.19 / 7.94 | 8.88 / 9.67 | 6.24 / 6.89 |
+| 8 h | 2024 | 10.68 / 9.67 | 13.71 / 11.84 | 8.75 / 8.60 |
+| 12 h | 2024 | 11.28 / 11.29 | 14.71 / 13.88 | 9.17 / 9.64 |
 
 *Decision:*
 - **Offer the mix in the dashboard** as "Tipo de operación": `default` = "Mixto", `mostly_double` = "Principalmente turnos dobles", `mostly_single` = "Principalmente un turno". Show the results as they are, and state in the app that the model was trained on the mixed operation.
@@ -452,6 +471,11 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 - **The user's battery and period are the default** (option A, decided 2026-11-13):
   - **Why:** in the dashboard the user picks the battery (4 / 8 / 12 h) and the dates in the sidebar, and the chat must answer for the same scenario the charts show.
   - **`UserSettings(preset, start, end)`** lives in `energy/agent/settings.py`. It defaults to 8 h, 2025-10-01..2025-12-31 (`config.DEFAULT_*`), and it is validated: a known preset, start ≤ end, one calendar year, inside the data. `run_agent(..., settings=...)` takes it.
+  - **Why one calendar year (written down 2026-11-14):**
+    - **One model per year:** there is one Q-table and one set of tuned price-rule cut-offs per year (D15), and `simulate()` picks them by the **start date's year**.
+    - **What a cross-year range would do:** a range such as November 2024 – February 2025 would quietly run the 2024 model on 2025 prices. The results would look normal, but January–February 2025 would be judged by a model trained on another year's prices.
+    - **Where it's enforced:** `UserSettings`, the agent tool, and the dashboard's custom-dates picker all reject such ranges.
+    - **Alternative not taken:** split the range at January 1 and use each year's model. That means work in `simulate`, the agent tool and the tests, for little demo value.
   - **Filled by code:** when the model omits `preset`, the loop fills it from the settings. It fills `start_date` and `end_date` only when both are missing; if one is given alone, the tool's error goes back to the model. `ToolCallRecord.from_settings` records which arguments were filled.
   - **The prompt states the settings,** and says to use another battery or period only when the user asks explicitly, which keeps comparisons working. The results block opens with `Escenario: batería de 12 h · oct–dic 2024 · Q-learning`, so the scenario is always visible.
   - **The tool's schema no longer requires dates.** The function still rejects a call without them, with a Spanish error.

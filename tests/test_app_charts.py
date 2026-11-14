@@ -12,13 +12,15 @@ import pytest
 
 from energy.agent.render import POLICY_NAMES
 from energy.app.charts import POLICY_COLORS, cumulative_figure, operation_figure, size_figure
-from energy.app.model import APP_POLICIES, PolicyRun
+from energy.app.model import APP_POLICIES, CalendarRun, PolicyRun
 from energy.rl.battery import get_preset
 
 PRESET_ID = "4h"
 N = 48
-# Factory off at hours [5, 9), [20, 22) and the last hour: three contiguous runs.
+# Factory off at hours [5, 9), [20, 22) and the last hour, so it runs in [0, 5), [9, 20),
+# [22, 47): three contiguous on-runs.
 OFF_RUNS = [(5, 9), (20, 22), (47, 48)]
+ON_RUNS = [(0, 5), (9, 20), (22, 47)]
 
 
 @pytest.fixture
@@ -44,7 +46,12 @@ def make_run(pid: str, values: list[float]) -> PolicyRun:
     return PolicyRun(
         policy_id=pid, policy_used=pid, savings_cop=values[-1], savings_min_cop=values[-1],
         savings_max_cop=values[-1], cycles=1.0, cum_savings=pd.Series(values, index=idx),
-        hourly=pd.DataFrame({"timestamp": idx}),
+        calendars=(
+            CalendarRun(
+                seed=1000, savings_cop=values[-1], cycles=1.0,
+                hourly=pd.DataFrame({"timestamp": idx}),
+            ),
+        ),
     )
 
 
@@ -87,20 +94,32 @@ def test_operation_price_trace_is_full_series(week):
     assert np.allclose(price.y, week["price_cop_kwh"])
 
 
-def test_operation_shapes_one_per_factory_off_run(week):
+def test_operation_shapes_one_per_factory_on_run(week):
     fig = operation_figure(week, PRESET_ID, "Q-learning")
-    assert len(fig.layout.shapes) == len(OFF_RUNS)
+    assert len(fig.layout.shapes) == len(ON_RUNS)
     assert all(s.type == "rect" for s in fig.layout.shapes)
+    starts = [pd.Timestamp(s.x0) for s in fig.layout.shapes]
+    assert starts == [week["timestamp"].iloc[a] for a, _ in ON_RUNS]
 
 
-def test_operation_no_shapes_when_factory_always_on(week):
+def test_operation_shapes_span_full_height(week):
+    for s in operation_figure(week, PRESET_ID, "Q-learning").layout.shapes:
+        assert s.yref == "paper" and s.y0 == 0 and s.y1 == 1
+
+
+def test_operation_single_shape_when_factory_always_on(week):
     week["factory_on"] = True
+    assert len(operation_figure(week, PRESET_ID, "x").layout.shapes) == 1
+
+
+def test_operation_no_shapes_when_always_off(week):
+    week["factory_on"] = False
     assert len(operation_figure(week, PRESET_ID, "x").layout.shapes) == 0
 
 
-def test_operation_single_shape_when_always_off(week):
-    week["factory_on"] = False
-    assert len(operation_figure(week, PRESET_ID, "x").layout.shapes) == 1
+def test_operation_legend_entry_for_factory_running(week):
+    fig = operation_figure(week, PRESET_ID, "Q-learning")
+    assert len(_by_prefix(fig, "Fábrica funcionando")) == 1
 
 
 def test_operation_soc_percent(week):
@@ -115,7 +134,7 @@ def test_operation_soc_percent(week):
 def test_operation_accepts_preset_id_or_object(week, as_object):
     preset = get_preset(PRESET_ID) if as_object else PRESET_ID
     fig = operation_figure(week, preset, "Q-learning")
-    assert len(fig.data) == 4
+    assert len(fig.data) == 5
 
 
 def test_operation_two_rows_share_x(week):
@@ -174,3 +193,18 @@ def test_policy_colors_cover_app_policies_and_are_distinct():
     assert set(APP_POLICIES) <= set(POLICY_COLORS)
     colors = [POLICY_COLORS[p] for p in APP_POLICIES]
     assert len(set(colors)) == len(colors)
+
+
+def test_title_sits_above_the_legend_band(week, table):
+    # The title is pinned to the top of the figure and the top margin leaves a band for
+    # the horizontal legend, so the two never overlap (seen in the first dashboard run).
+    run = make_run("q_learning", [0.0, 1.0])
+    for fig in (
+        operation_figure(week, PRESET_ID, "Q-learning"),
+        cumulative_figure({"q_learning": run}),
+        size_figure(table),
+    ):
+        assert fig.layout.title.yref == "container"
+        assert fig.layout.title.yanchor == "top"
+        assert fig.layout.legend.yanchor == "bottom"
+        assert fig.layout.margin.t >= 120

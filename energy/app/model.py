@@ -14,13 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 from energy import config
 from energy.rl.battery import PRESETS
-from energy.rl.factory import TEST_SHIFT_SEEDS, add_shifts
+from energy.rl.factory import N_SHIFT_TYPES, SHIFT_HOURS, TEST_SHIFT_SEEDS, add_shifts, get_mix
 from energy.rl.simulate import resolve_policy, simulate
 
 # No perfect foresight (an oracle) and no "no battery" (always 0): decided with the user.
@@ -34,19 +35,35 @@ MIX_LABELS: dict[str, str] = {
 
 # Test quarter of each year (D5); 2024 is the El Niño cross-year check.
 SCENARIOS: dict[str, tuple[date, date]] = {
-    "2025 (normal)": (date(2025, 10, 1), date(2025, 12, 31)),
-    "2024 (El Niño, precios altos)": (date(2024, 10, 1), date(2024, 12, 31)),
+    "Oct-Dic 2025": (date(2025, 10, 1), date(2025, 12, 31)),
+    "Oct-Dic 2024 (El Niño)": (date(2024, 10, 1), date(2024, 12, 31)),
 }
 
 WEEK_HOURS = 168
 
 
 @dataclass(frozen=True)
+class CalendarRun:
+    """One simulation of one policy on one synthetic shift calendar (A5, D15).
+
+    ``savings_cop`` and ``cycles`` come from the same simulation as ``hourly``, so the
+    numbers shown next to a plot cannot drift from it.
+    """
+
+    seed: int
+    savings_cop: float
+    cycles: float
+    hourly: pd.DataFrame
+
+
+@dataclass(frozen=True)
 class PolicyRun:
-    """One policy over the period, averaged over the shift calendars.
+    """One policy over the period: means over the shift calendars plus each calendar.
 
     ``policy_used`` is the policy that actually ran (a missing Q-table falls back to
-    ``shift_schedule``). ``hourly`` is the first calendar's trace.
+    ``shift_schedule``). ``savings_cop``, ``savings_*_cop``, ``cycles`` and ``cum_savings``
+    are means (or extremes) over the calendars; ``calendars`` keeps every simulation in
+    ``seeds`` order, so a view can show one calendar without simulating again.
     """
 
     policy_id: str
@@ -56,7 +73,7 @@ class PolicyRun:
     savings_max_cop: float
     cycles: float
     cum_savings: pd.Series
-    hourly: pd.DataFrame
+    calendars: tuple[CalendarRun, ...]
 
 
 @dataclass(frozen=True)
@@ -94,7 +111,8 @@ def run_policies(
 
     Returns:
         ``policy_id -> PolicyRun``; savings and cycles are means over ``seeds``,
-        ``savings_min_cop`` / ``savings_max_cop`` their extremes.
+        ``savings_min_cop`` / ``savings_max_cop`` their extremes, and ``calendars`` holds
+        each seed's own simulation.
     """
     # Shifts once per seed and policies once each, shared across the loop.
     frames = [add_shifts(featured, mix, seed) for seed in seeds]
@@ -105,6 +123,10 @@ def run_policies(
         savings = [r.summary.savings_cop for r in results]
         cum = np.mean([r.hourly["cum_savings_cop"].to_numpy() for r in results], axis=0)
         first = results[0]
+        calendars = tuple(
+            CalendarRun(seed, float(r.summary.savings_cop), float(r.summary.cycles), r.hourly)
+            for seed, r in zip(seeds, results)
+        )
         out[pid] = PolicyRun(
             policy_id=pid,
             policy_used=first.summary.policy,
@@ -113,7 +135,7 @@ def run_policies(
             savings_max_cop=float(max(savings)),
             cycles=float(np.mean([r.summary.cycles for r in results])),
             cum_savings=pd.Series(cum, index=pd.DatetimeIndex(first.hourly["timestamp"])),
-            hourly=first.hourly,
+            calendars=calendars,
         )
     return out
 
@@ -140,25 +162,52 @@ def size_comparison(
     return pd.DataFrame(rows, columns=["preset_id", "policy_id", "savings_cop"])
 
 
-def compute_kpis(runs: dict[str, PolicyRun]) -> Kpis:
+def compute_kpis(
+    runs: dict[str, PolicyRun], calendar: Literal["mean"] | int = "mean"
+) -> Kpis:
     """Q-learning against the best rule among the other policies present.
 
     Ties go to the first rule in `APP_POLICIES` order. The percentage uses the same
     formula as ``vs_best_rule`` in the agent tool, and is None when the best rule does
     not save money (the ratio would be meaningless).
 
+    Args:
+        runs: Output of `run_policies`.
+        calendar: ``"mean"`` for the average over the shift calendars, or a 0-based index
+            to use that single calendar for every policy; the best rule is re-picked on it.
+
     Raises:
         KeyError: If ``runs`` has no ``q_learning``.
-        ValueError: If there is no rule to compare with.
+        ValueError: If there is no rule to compare with, or ``calendar`` is neither
+            ``"mean"`` nor an index inside ``0..n_calendars-1``.
     """
     q = runs["q_learning"]
+    if calendar == "mean":
+        def savings(run: PolicyRun) -> float:
+            return run.savings_cop
+
+        q_cycles = q.cycles
+    elif isinstance(calendar, int) and not isinstance(calendar, bool):
+        if not 0 <= calendar < len(q.calendars):
+            raise ValueError(
+                f"calendar index {calendar} out of range 0..{len(q.calendars) - 1}"
+            )
+
+        def savings(run: PolicyRun) -> float:
+            return run.calendars[calendar].savings_cop
+
+        q_cycles = q.calendars[calendar].cycles
+    else:
+        raise ValueError(f"calendar must be 'mean' or an int index, got {calendar!r}")
+
     rules = [pid for pid in APP_POLICIES if pid != "q_learning" and pid in runs]
     if not rules:
         raise ValueError("compute_kpis needs at least one rule besides q_learning")
-    best_id = max(rules, key=lambda pid: runs[pid].savings_cop)  # max keeps the first tie
-    best = runs[best_id].savings_cop
-    pct = (q.savings_cop - best) / abs(best) * 100 if best > 0 else None
-    return Kpis(q.savings_cop, best_id, best, pct, q.cycles)
+    best_id = max(rules, key=lambda pid: savings(runs[pid]))  # max keeps the first tie
+    best = savings(runs[best_id])
+    q_savings = savings(q)
+    pct = (q_savings - best) / abs(best) * 100 if best > 0 else None
+    return Kpis(q_savings, best_id, best, pct, q_cycles)
 
 
 def n_weeks(hourly: pd.DataFrame) -> int:
@@ -199,6 +248,29 @@ def period_label(start: date, end: date) -> str:
     if start.year != end.year:
         left += f" {start.year}"
     return f"{left} – {right}"
+
+
+def weekly_hours(mix: str) -> float:
+    """Expected hours a week the factory runs under a shift mix (A5).
+
+    Computed from the mix's probabilities and the shift lengths, so the dashboard hint
+    can't drift from ``energy/rl/factory.py``.
+
+    Raises:
+        ValueError: If the mix is unknown.
+    """
+    shift_mix = get_mix(mix)
+    lengths = [len(SHIFT_HOURS[s]) for s in range(N_SHIFT_TYPES)]
+
+    def per_day(probs: tuple[float, ...]) -> float:
+        return sum(p * h for p, h in zip(probs, lengths))
+
+    return 5 * per_day(shift_mix.weekday) + per_day(shift_mix.saturday) + per_day(shift_mix.sunday)
+
+
+def mix_option_label(mix: str) -> str:
+    """Selector label with the running hours, e.g. ``Mixto (≈ 57 h/semana)``."""
+    return f"{MIX_LABELS[mix]} (≈ {weekly_hours(mix):.0f} h/semana)"
 
 
 def status_line(preset_id: str, start: date, end: date, mix: str) -> str:

@@ -31,6 +31,7 @@ from energy.rl.battery import PRESETS
 from energy.rl.features import add_relative_price
 
 MESSAGES_KEY = "mensajes"
+CUSTOM_PERIOD = "Personalizado"
 
 
 def error_text(exc: BaseException) -> str:
@@ -79,21 +80,22 @@ def load_agent() -> tuple[Any, Any, str | None, str | None]:
 
 
 def _period_widgets() -> tuple[date, date]:
-    """Scenario radio plus optional custom dates; returns the period to simulate."""
-    scenario = st.sidebar.radio("Escenario", list(model.SCENARIOS), key="escenario")
-    start, end = model.SCENARIOS[scenario]
-    with st.sidebar.expander("Fechas personalizadas"):
-        if st.checkbox("Usar otro periodo", key="fechas_custom"):
-            picked = st.date_input(
-                "Periodo (mismo año)", value=(start, end), min_value=DATA_FIRST_DAY,
-                max_value=DATA_LAST_DAY, key="rango",
-            )
-            # Mid-selection the widget returns a 1-tuple: keep the scenario dates meanwhile.
-            if isinstance(picked, (tuple, list)) and len(picked) == 2:
-                start, end = picked
-            else:
-                st.info("Elige también la fecha final.")
-    return start, end
+    """One radio for the period (two scenarios or custom); returns the dates to simulate."""
+    choice = st.sidebar.radio(
+        "Periodo", [*model.SCENARIOS, CUSTOM_PERIOD], key="escenario"
+    )
+    if choice != CUSTOM_PERIOD:
+        return model.SCENARIOS[choice]
+    default = next(iter(model.SCENARIOS.values()))  # 2025 test quarter
+    picked = st.sidebar.date_input(
+        "Fechas (mismo año)", value=default, min_value=DATA_FIRST_DAY,
+        max_value=DATA_LAST_DAY, key="rango",
+    )
+    # Mid-selection the widget returns a 1-tuple: keep the default dates meanwhile.
+    if isinstance(picked, (tuple, list)) and len(picked) == 2:
+        return picked[0], picked[1]
+    st.sidebar.info("Elige también la fecha final.")
+    return default
 
 
 def sidebar() -> tuple[UserSettings, str]:
@@ -105,8 +107,10 @@ def sidebar() -> tuple[UserSettings, str]:
         format_func=lambda p: PRESETS[p].label, key="bateria",
     )
     mix = st.sidebar.selectbox(
-        "Tipo de operación", list(model.MIX_LABELS), format_func=model.MIX_LABELS.get,
+        "Tipo de operación", list(model.MIX_LABELS), format_func=model.mix_option_label,
         key="operacion",
+        help="Horas de operación por semana en promedio. La batería solo puede descargar "
+        "mientras la fábrica funciona. Los turnos son simulados.",
     )
     try:
         settings = UserSettings(preset, start, end)
@@ -130,9 +134,8 @@ def sidebar() -> tuple[UserSettings, str]:
 # --------------------------------------------------------------------------- indicators
 
 
-def indicators(runs: dict[str, model.PolicyRun]) -> None:
-    """Three headline metrics: Q-learning savings, gain over the best rule, cycles."""
-    kpis = model.compute_kpis(runs)
+def _kpi_metrics(kpis: model.Kpis) -> None:
+    """The three Q-learning metrics for one `Kpis`."""
     rule = POLICY_NAMES[kpis.best_rule_id]
     c1, c2, c3 = st.columns(3)
     c1.metric("Ahorro con Q-learning", cop(kpis.q_savings_cop))
@@ -142,7 +145,12 @@ def indicators(runs: dict[str, model.PolicyRun]) -> None:
         help=f"La mejor regla simple en este caso: {rule} ({cop(kpis.best_rule_savings_cop)}).",
     )
     c3.metric("Ciclos de la batería", f"{kpis.q_cycles:.1f}")
-    st.caption("Promedio de 5 calendarios de turnos simulados, periodo completo.")
+
+
+def indicators(runs: dict[str, model.PolicyRun]) -> None:
+    """Headline metrics averaged over the 5 shift calendars (D15, A5)."""
+    st.markdown("##### Promedio de 5 calendarios de turnos simulados")
+    _kpi_metrics(model.compute_kpis(runs))
 
 
 # --------------------------------------------------------------------------- tabs
@@ -160,21 +168,36 @@ def tab_operacion(runs: dict[str, model.PolicyRun], settings: UserSettings) -> N
             st.warning(
                 "Falta la tabla entrenada de esta política; se muestra el horario por turnos."
             )
-        n = model.n_weeks(run.hourly)
+        total = len(run.calendars)
+        # segmented_control returns None when the user deselects the active option.
+        picked = st.segmented_control(
+            "Calendario de turnos", list(range(1, total + 1)), selection_mode="single",
+            default=1, key="calendario",
+        )
+        k = picked or 1
+        calendar = run.calendars[k - 1]
+        # Same simulation as the plot below, so these are real numbers, not averages.
+        st.markdown(f"##### Calendario de turnos {k} de {total}")
+        _kpi_metrics(model.compute_kpis(runs, k - 1))
+        if pid != "q_learning":
+            st.metric(f"Ahorro con {POLICY_NAMES[pid]}", cop(calendar.savings_cop))
+        st.caption("Ahorro del periodo completo; el gráfico muestra una semana.")
+        # All calendars cover the same dates, so the week count does not depend on k.
+        n = model.n_weeks(calendar.hourly)
         # Reset before the widget exists: a stale value above the new max would raise.
         if st.session_state.get("semana", 1) > n:
             st.session_state["semana"] = 1
         week = st.slider("Semana", 1, n, key="semana") if n > 1 else 1
         st.plotly_chart(
             charts.operation_figure(
-                model.week_slice(run.hourly, week - 1), settings.preset, POLICY_NAMES[pid]
+                model.week_slice(calendar.hourly, week - 1), settings.preset, POLICY_NAMES[pid]
             ),
             width="stretch",
         )
         st.caption(
             "Línea gris: precio de la energía. Triángulos verdes: la batería carga (compra); "
-            "rojos: descarga (ahorra). Zonas grises: fábrica apagada, la batería no puede "
-            "descargar. Abajo: nivel de carga. Se muestra el calendario de turnos 1 de 5."
+            "rojos: descarga (ahorra). Zonas moradas: fábrica funcionando; fuera de ellas la "
+            "batería no puede descargar. Abajo: nivel de carga."
         )
     except Exception as exc:  # noqa: BLE001 - no exception may reach the top level
         st.error(error_text(exc))
@@ -271,7 +294,7 @@ def tab_acerca() -> None:
     st.markdown(
         """
 ### Datos
-- **Precio de bolsa horario** (`PrecBolsNaci`) publicado por XM, 2024–2025. Se guarda una
+- **Precio de bolsa horario** (`PrecBolsNaci`) publicado por XM, 2024-2025. Se guarda una
   copia en el repositorio, así que la aplicación funciona sin conexión.
 - **Normativa**: resoluciones de la CREG y documentos de XM sobre almacenamiento con baterías.
   El asistente responde con estos textos y cita la fuente.
@@ -279,18 +302,16 @@ def tab_acerca() -> None:
 ### Método
 Un programa aprende, por ensayo y error sobre los precios de enero a septiembre, a decidir
 cada hora si **cargar**, **descargar** o **esperar** (Q-learning tabular, D14/D15). Se
-evalúa en octubre–diciembre, que no vio al entrenar, y se compara con reglas simples
+evalúa en octubre-diciembre, que no vio al entrenar, y se compara con reglas simples
 (umbral de precio, horario por turnos, carga nocturna y descarga diurna). El ahorro se mide
 frente a no tener batería.
 
 ### Limitaciones
-- El precio de bolsa **no es tu tarifa**: tu contrato puede ser muy distinto.
-- Los turnos de la fábrica son **simulados**, no tu calendario real.
-- El modelo se entrenó con operación mixta; con un solo turno una regla de precio rinde igual.
+- Se usa el precio de bolsa. No se tiene encuenta una tarifa.
+- Los turnos de la fábrica son **simulados**.
+- El modelo basado en Q-learning se entrenó con operación mixta.
 - No se modela el desgaste de la batería.
-- El ahorro es frente a no tener batería y **no incluye costos de inversión**: compáralo con
-  la cotización de tu proveedor.
-- Prototipo académico: no es asesoría legal ni financiera.
+- El ahorro es frente a no tener batería y **no incluye costos** de inversión o de la operación de la batería.
 """
     )
 
@@ -302,12 +323,12 @@ def main() -> None:
     """Page entry point."""
     st.set_page_config(page_title="Batería inteligente", layout="wide")
     config.load_env()  # via the module so tests can replace it (never loads real keys)
-    st.title("Batería inteligente para tu planta")
+    st.title("Carga inteligente de batería para tu planta")
     settings, mix = sidebar()
     st.caption(model.status_line(settings.preset, settings.start, settings.end, mix))
     st.warning(
-        "Prototipo académico: no es asesoría legal ni financiera. Los turnos de la fábrica "
-        "son simulados y el ahorro se mide frente a no tener batería."
+        "Observa cuando ahorras si usaras una inteligentmenente batería para los turnos de tu fábrica. "
+        "Cinco calendarios de turnos son simulados. El ahorro se mide frente a no tener batería."
     )
     try:
         runs = cached_runs(settings.preset, settings.start, settings.end, mix)

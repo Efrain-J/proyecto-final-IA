@@ -26,16 +26,21 @@ CHARGE_COLOR = "#2E9E6B"
 DISCHARGE_COLOR = "#D9534F"
 PRICE_COLOR = "#8A94A0"
 _GRID = "rgba(128,128,128,0.2)"
-_FACTORY_OFF = "rgba(128,128,128,0.15)"
+# Purple = factory running (A5, D15). Translucent so the grid and lines stay readable; the
+# hue differs from the blue of Q-learning and from the muted purple of night/day.
+_FACTORY_ON = "rgba(124, 77, 255, 0.12)"
+_FACTORY_ON_SWATCH = "rgba(124, 77, 255, 0.45)"
 
 
 def _layout(fig: go.Figure, title: str) -> go.Figure:
     fig.update_layout(
-        title=title,
+        # Title pinned to the top of the figure; the 120 px top margin leaves a band
+        # between it and the plot for the horizontal legend, so they don't crowd.
+        title=dict(text=title, x=0, xanchor="left", y=0.98, yref="container", yanchor="top"),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(t=90, r=20, l=60, b=40),
+        margin=dict(t=120, r=20, l=60, b=40),
         hovermode="x unified",
         separators=",.",  # es-CO: decimal comma, thousands dot, as render.cop() in the chat
     )
@@ -44,10 +49,10 @@ def _layout(fig: go.Figure, title: str) -> go.Figure:
     return fig
 
 
-def _off_runs(factory_on: pd.Series) -> list[tuple[int, int]]:
-    """Half-open index ranges ``[a, b)`` of contiguous hours with the factory off."""
-    off = (~factory_on.to_numpy(dtype=bool)).astype(int)
-    edges = pd.Series([0, *off, 0]).diff().to_numpy()[1:]
+def _on_runs(factory_on: pd.Series) -> list[tuple[int, int]]:
+    """Half-open index ranges ``[a, b)`` of contiguous hours with the factory running."""
+    on = factory_on.to_numpy(dtype=bool).astype(int)
+    edges = pd.Series([0, *on, 0]).diff().to_numpy()[1:]
     starts = (edges == 1).nonzero()[0]
     ends = (edges == -1).nonzero()[0]
     return list(zip(starts.tolist(), ends.tolist()))
@@ -58,8 +63,8 @@ def operation_figure(
 ) -> go.Figure:
     """Price with charge/discharge markers on top, state of charge (%) below.
 
-    Hours with the factory off (A5, D15) are shaded grey, since the battery cannot
-    discharge to the grid then.
+    Hours with the factory running (A5, D15) are shaded purple across both panels, since
+    the battery can only discharge then; a legend entry explains the shading.
 
     Args:
         week: Hourly trace slice (timestamp, price_cop_kwh, action, soc_level, factory_on).
@@ -104,17 +109,27 @@ def operation_figure(
         row=2, col=1,
     )
     ts = ts.reset_index(drop=True)
-    for a, b in _off_runs(week["factory_on"].reset_index(drop=True)):
-        fig.add_vrect(
-            x0=ts[a], x1=ts[b - 1] + pd.Timedelta(hours=1), fillcolor=_FACTORY_OFF,
-            line_width=0, layer="below", row=1, col=1,
+    # One shape per run, in paper coordinates: it spans both subplots (shared x axis).
+    for a, b in _on_runs(week["factory_on"].reset_index(drop=True)):
+        fig.add_shape(
+            type="rect", xref="x", yref="paper", y0=0, y1=1,
+            x0=ts[a], x1=ts[b - 1] + pd.Timedelta(hours=1),
+            fillcolor=_FACTORY_ON, line_width=0, layer="below",
         )
+    # Legend-only trace: shapes have no legend entry.
+    fig.add_trace(
+        go.Scatter(
+            x=[None], y=[None], mode="markers", name="Fábrica funcionando",
+            marker=dict(color=_FACTORY_ON_SWATCH, symbol="square", size=12),
+            hoverinfo="skip",
+        ),
+        row=1, col=1,
+    )
     fig.update_yaxes(title_text="Precio (COP/kWh)", row=1, col=1)
     fig.update_yaxes(title_text="Carga (%)", range=[0, 100], row=2, col=1)
     return _layout(
         fig,
-        f"Operación de la batería ({preset.label}) con {policy_name}"
-        " - zonas grises: fábrica apagada",
+        f"Operación de la batería ({preset.label}) con {policy_name}",
     )
 
 

@@ -16,6 +16,7 @@ from energy.app.model import (
     APP_POLICIES,
     MIX_LABELS,
     SCENARIOS,
+    CalendarRun,
     Kpis,
     PolicyRun,
     compute_kpis,
@@ -57,13 +58,24 @@ def runs(featured, policies_dir):
     return run_policies(featured, PRESET, START, END, seeds=SEEDS, policies_dir=policies_dir)
 
 
-def make_run(policy_id: str, savings: float, cycles: float = 1.0) -> PolicyRun:
+def make_run(
+    policy_id: str,
+    savings: float,
+    cycles: float = 1.0,
+    per_calendar: tuple[tuple[float, float], ...] | None = None,
+) -> PolicyRun:
+    """Hand-built run; ``per_calendar`` is ``(savings, cycles)`` for each calendar."""
     idx = pd.date_range("2025-10-06", periods=3, freq="h")
     cum = pd.Series([0.0, savings / 2, savings], index=idx)
+    pairs = per_calendar if per_calendar is not None else ((savings, cycles),)
+    calendars = tuple(
+        CalendarRun(seed=1000 + i, savings_cop=sav, cycles=cyc, hourly=pd.DataFrame({"timestamp": idx}))
+        for i, (sav, cyc) in enumerate(pairs)
+    )
     return PolicyRun(
         policy_id=policy_id, policy_used=policy_id, savings_cop=savings,
         savings_min_cop=savings, savings_max_cop=savings, cycles=cycles,
-        cum_savings=cum, hourly=pd.DataFrame({"timestamp": idx}),
+        cum_savings=cum, calendars=calendars,
     )
 
 
@@ -87,8 +99,8 @@ def test_mix_labels():
 
 def test_scenarios():
     assert SCENARIOS == {
-        "2025 (normal)": (date(2025, 10, 1), date(2025, 12, 31)),
-        "2024 (El Niño, precios altos)": (date(2024, 10, 1), date(2024, 12, 31)),
+        "Oct-Dic 2025": (date(2025, 10, 1), date(2025, 12, 31)),
+        "Oct-Dic 2024 (El Niño)": (date(2024, 10, 1), date(2024, 12, 31)),
     }
 
 
@@ -122,17 +134,32 @@ def test_run_policies_matches_direct_simulation(featured, policies_dir, runs, pi
     assert run.savings_max_cop == pytest.approx(max(sav))
     assert run.cycles == pytest.approx(np.mean([d.summary.cycles for d in direct]))
     assert run.policy_used == direct[0].summary.policy
-    pd.testing.assert_frame_equal(
-        run.hourly.reset_index(drop=True), direct[0].hourly.reset_index(drop=True)
-    )
+
+
+@pytest.mark.parametrize("pid", APP_POLICIES)
+def test_run_policies_each_calendar_matches_its_seed(featured, policies_dir, runs, pid):
+    policy = resolve_policy(pid, PRESET, START.year, policies_dir)
+    run = runs[pid]
+    assert len(run.calendars) == len(SEEDS)
+    for cal, seed in zip(run.calendars, SEEDS):
+        assert isinstance(cal, CalendarRun)
+        direct = simulate(policy, START, END, PRESET, prices=add_shifts(featured, "default", seed))
+        assert cal.seed == seed
+        assert cal.savings_cop == pytest.approx(direct.summary.savings_cop)
+        assert cal.cycles == pytest.approx(direct.summary.cycles)
+        assert cal.savings_cop == pytest.approx(cal.hourly["savings_cop"].sum())
+        pd.testing.assert_frame_equal(
+            cal.hourly.reset_index(drop=True), direct.hourly.reset_index(drop=True)
+        )
 
 
 def test_run_policies_cum_savings_is_seed_mean(runs):
     run = runs["q_learning"]
     assert isinstance(run.cum_savings, pd.Series)
     assert run.cum_savings.iloc[-1] == pytest.approx(run.savings_cop)
-    assert len(run.cum_savings) == len(run.hourly)
-    assert list(pd.DatetimeIndex(run.cum_savings.index)) == list(run.hourly["timestamp"])
+    first = run.calendars[0].hourly
+    assert len(run.cum_savings) == len(first)
+    assert list(pd.DatetimeIndex(run.cum_savings.index)) == list(first["timestamp"])
 
 
 def test_run_policies_min_le_mean_le_max(runs):
@@ -154,8 +181,8 @@ def test_run_policies_mix_changes_shift_pattern(featured, policies_dir):
     kw = dict(policy_ids=("shift_schedule",), seeds=(1000,), policies_dir=policies_dir)
     a = run_policies(featured, PRESET, START, END, mix="mostly_single", **kw)
     b = run_policies(featured, PRESET, START, END, mix="mostly_double", **kw)
-    assert not a["shift_schedule"].hourly["shift_type"].equals(
-        b["shift_schedule"].hourly["shift_type"]
+    assert not a["shift_schedule"].calendars[0].hourly["shift_type"].equals(
+        b["shift_schedule"].calendars[0].hourly["shift_type"]
     )
 
 
@@ -250,6 +277,57 @@ def test_kpis_ignore_q_when_picking_best_rule():
         {"q_learning": make_run("q_learning", 999.0), "night_day": make_run("night_day", 1.0)}
     )
     assert k.best_rule_id == "night_day"
+
+
+def _two_calendar_runs() -> dict[str, PolicyRun]:
+    """The best rule differs between the mean and each calendar."""
+    return {
+        "q_learning": make_run("q_learning", 120.0, cycles=2.0, per_calendar=((60.0, 3.0), (180.0, 1.0))),
+        "price_threshold": make_run("price_threshold", 100.0, per_calendar=((20.0, 1.0), (180.0, 1.0))),
+        "shift_schedule": make_run("shift_schedule", 80.0, per_calendar=((50.0, 1.0), (110.0, 1.0))),
+        "night_day": make_run("night_day", 50.0, per_calendar=((10.0, 1.0), (90.0, 1.0))),
+    }
+
+
+def test_kpis_calendar_index_repicks_best_rule():
+    runs = _two_calendar_runs()
+    mean = compute_kpis(runs)
+    first = compute_kpis(runs, 0)
+    second = compute_kpis(runs, 1)
+    assert mean.best_rule_id == "price_threshold"
+    assert first.best_rule_id == "shift_schedule"
+    assert (first.q_savings_cop, first.best_rule_savings_cop, first.q_cycles) == (60.0, 50.0, 3.0)
+    assert first.q_vs_best_rule_pct == pytest.approx(20.0)
+    assert second.best_rule_id == "price_threshold"
+    assert (second.q_savings_cop, second.best_rule_savings_cop, second.q_cycles) == (180.0, 180.0, 1.0)
+    assert second.q_vs_best_rule_pct == pytest.approx(0.0)
+    assert compute_kpis(runs, "mean") == mean
+
+
+def test_kpis_calendar_tie_goes_to_first_in_app_order():
+    runs = {
+        "q_learning": make_run("q_learning", 10.0, per_calendar=((10.0, 1.0),)),
+        "night_day": make_run("night_day", 70.0, per_calendar=((70.0, 1.0),)),
+        "price_threshold": make_run("price_threshold", 70.0, per_calendar=((70.0, 1.0),)),
+    }
+    assert compute_kpis(runs, 0).best_rule_id == "price_threshold"
+
+
+def test_kpis_calendar_pct_none_when_best_not_positive():
+    k = compute_kpis(
+        {
+            "q_learning": make_run("q_learning", 10.0, per_calendar=((10.0, 1.0),)),
+            "night_day": make_run("night_day", 5.0, per_calendar=((-1.0, 1.0),)),
+        },
+        0,
+    )
+    assert k.q_vs_best_rule_pct is None
+
+
+@pytest.mark.parametrize("bad", [2, -1, "first", "second", 1.0, None, True])
+def test_kpis_bad_calendar_raises(bad):
+    with pytest.raises(ValueError, match="calendar"):
+        compute_kpis(_two_calendar_runs(), bad)  # type: ignore[arg-type]
 
 
 # --- n_weeks / week_slice ---
