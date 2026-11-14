@@ -44,10 +44,11 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class ChatReply:
-    """A model reply: text, tool calls, or both."""
+    """A model reply: text, tool calls, or both; ``model`` is the id that answered (or None)."""
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    model: str | None = None  # lets the evaluation record fallbacks to the 20b model (D16)
 
 
 ChatFn = Callable[[list[dict], list[dict] | None], ChatReply]
@@ -77,13 +78,13 @@ def _short_rate_limit_wait(exc: Exception) -> float | None:
     return seconds if seconds <= MAX_RATE_WAIT_S else None
 
 
-def _to_reply(response: Any) -> ChatReply:
+def _to_reply(response: Any, model: str | None = None) -> ChatReply:
     message = response.choices[0].message
     calls = [
         ToolCall(id=c.id, name=c.function.name, arguments=c.function.arguments or "{}")
         for c in (message.tool_calls or [])
     ]
-    return ChatReply(content=message.content, tool_calls=calls)
+    return ChatReply(content=message.content, tool_calls=calls, model=model)
 
 
 def make_groq_chat(
@@ -127,7 +128,7 @@ def make_groq_chat(
                 kwargs["reasoning_effort"] = REASONING_EFFORT
             for attempt in range(2):
                 try:
-                    return _to_reply(groq.chat.completions.create(**kwargs))
+                    return _to_reply(groq.chat.completions.create(**kwargs), model)
                 except Exception as exc:  # classified below; the SDK has many error types
                     last = exc
                     logger.warning("Groq %s failed (attempt %d): %s", model, attempt + 1, exc)

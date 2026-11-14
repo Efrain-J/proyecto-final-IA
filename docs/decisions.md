@@ -440,6 +440,7 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
   - **The figures stayed correct,** because the results block is rendered by code.
   - **Consequence:** the network test now checks that the user's battery and dates were simulated, not whether the model omitted the arguments.
   - **Plan the agent evaluation and the demo around the daily limit.**
+- **`ChatReply.model` (added 2026-11-13, step 7):** the id of the model that answered, or None. The agent evaluation records it, so a fallback to the 20b model shows in the results.
 - **Live check:**
   - **What passed:** the regulation, simulation, mixed and trap questions behaved as specified; the network tests passed in 4 out of 4 runs.
   - **The model changed a digit when copying numbers by hand** (2.970.674 instead of 2.974.674). That's why the results block above is written by code.

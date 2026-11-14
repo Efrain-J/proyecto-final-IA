@@ -29,6 +29,7 @@ CHUNKS_PATH = DATA_DIR / "corpus" / "chunks.jsonl"
 QDRANT_DIR = DATA_DIR / "qdrant"
 POLICIES_DIR = ROOT / "artifacts" / "policies"
 RESULTS_DIR = ROOT / "results"
+AGENT_QUESTIONS = ROOT / "energy" / "eval" / "agent_questions.yaml"  # step 7
 ENV_FILE = ROOT / ".env"
 
 USER_AGENT = "trabajo-final-ia/0.1 (academic project)"

@@ -213,7 +213,9 @@ python-dotenv==1.2.4
 python-multipart==0.0.33
     # via streamlit
 pyyaml==6.0.3
-    # via langchain-core
+    # via
+    #   langchain-core
+    #   trabajo-final
 qdrant-client==1.20.0
     # via
     #   langchain-qdrant

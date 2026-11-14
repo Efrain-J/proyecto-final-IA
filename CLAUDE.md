@@ -21,7 +21,7 @@ Current state: the data layer (XM prices, corpus download) and the full RAG pipe
 - tuned parameters (`energy.eval.tune_q`)
 - the 2024 and 2025 scenarios, with a cross-year check
 
-`energy/config.py` (O8) holds the root-anchored paths and shared settings. The LLM agent (D16) is implemented in `energy/agent/`. Still to do: `eval/part1.py` (results), the agent evaluation and the dashboard. Update this file with the real commands as code is added.
+`energy/config.py` (O8) holds the root-anchored paths and shared settings. The LLM agent (D16) is implemented in `energy/agent/`. The agent evaluation runner is written (step 7); its live run is pending. Still to do: `eval/part1.py` (results) and the dashboard. Update this file with the real commands as code is added.
 
 ## Code documentation conventions
 
@@ -54,6 +54,7 @@ Managed with **uv**, Python 3.12 (`.python-version`). Commit `pyproject.toml` an
 - `energy/rl/train.py`: `uv run python -m energy.rl.train --scenarios 2025 [--workers N] [--shift-draws 5] [--mix default]` trains one Q-table per preset in parallel and tunes the price rule. It writes `artifacts/policies/q_<preset>_<year>.npz/.json` and `threshold_<preset>_<year>.json` (committed), and prints the mean test savings over 5 shift patterns, compared with the baselines. It takes about 31 s.
 - `energy/eval/tune_q.py`: `uv run python -m energy.eval.tune_q [--preset 8h] [--stage all]` tunes the Q-learning parameters on validation months only (January–June training, July–September validation), then tests the default and the winner once on October–December. It writes `results/tuning/` (D15).
 - `energy/agent/` (D16): `llm.py` (Groq `ChatFn`, fallback model, `LLMError`), `tools.py` (`search_regulation`, `simulate_battery` over the 5 test shift calendars, `run_tool` never raises), `prompts.py` (Spanish system prompt, `REFUSAL`), `render.py` (the results block: every simulation figure is rendered by code, never by the model), `loop.py` (`run_agent` with `T_MAX`, citation check and repair, `open_agent`). Try it with `uv run python -m energy.agent "pregunta" [--preset 8h] [--start YYYY-MM-DD --end YYYY-MM-DD] [--bm25]`. `settings.py` holds `UserSettings`, the user's battery and period, which `run_agent(settings=...)` uses as defaults. It needs `GROQ_API_KEY`; without it the answer is retrieval-only. Live tests: `uv run pytest -m network`.
+- `energy/eval/agent_eval.py` (step 7): `uv run python -m energy.eval.agent_eval [--ids 1,9] [--pause 20] [--bm25]` runs the fixed questions in `energy/eval/agent_questions.yaml` (edit the questions and their expected tools, sources and patterns there) and writes `results/agent_eval/` (`agent_eval.csv`, `transcripts.jsonl`, `summary.md`). Needs `GROQ_API_KEY`; about 11 questions × ~4k tokens, so run it once on a fresh Groq day.
 - Full RAG rebuild order after changing the corpus: `energy.data.corpus` → `energy.rag.clean` → `energy.rag.chunk` → `energy.rag.index`.
 - `tests/`: pytest, with HTTP mocked through `httpx.MockTransport`.
 

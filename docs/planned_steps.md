@@ -124,6 +124,10 @@ Build a Streamlit app with price vs. decisions, cumulative savings, battery para
 Write 10–15 fixed test questions, including trap questions, and record whether the agent called the right tool and cited a source.
 
 **Obstacles:**
+- **The planned price-history trap wasn't a trap:** the corpus has XM Paper N°52 on the high-price periods (El Niño 2024), so it became regulation question 4. The replacement trap asks for a battery's cost, which the corpus doesn't cover.
+- **A decline in the model's own words** isn't the exact refusal phrase; such answers are left for manual review instead of being scored automatically.
+
+**Written (2026-11-13), live run pending:** 11 questions in `energy/eval/agent_questions.yaml` (4 regulation, 3 simulation, 1 mixed, 3 traps: off-topic, out of corpus, prompt injection), each with its expected and forbidden tools, simulation arguments, sources and answer patterns. `energy/eval/agent_eval.py` runs them in fresh chats with the default settings and writes `results/agent_eval/`. Offline tests in `tests/test_agent_eval.py`.
 
 **Done:**
 

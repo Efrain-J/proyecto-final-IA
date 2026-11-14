@@ -205,3 +205,9 @@ def test_missing_api_key_raises_llm_error_without_calling_the_client(monkeypatch
     with pytest.raises(LLMError, match="GROQ_API_KEY"):
         chat(MESSAGES, None)
     assert client.calls == []
+
+
+def test_reply_records_the_model_that_answered():
+    # The evaluation reads this to report fallbacks to the second model (D16).
+    chat, _ = make_chat([FakeAPIError(500, "boom"), response("Hola")])
+    assert chat(MESSAGES, None).model == "model-b"
