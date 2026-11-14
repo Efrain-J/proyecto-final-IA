@@ -74,6 +74,10 @@ Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/po
 - **Obstacle:** the price rule tuned on January–September 2024 was weak on October–December 2024, which made Q-learning look 33% better than it is. We now compare against the strongest available rule (D15).
 - **Still to do:** move the cross-year script from the scratchpad into `energy/eval/`, with a CSV in `results/`.
 
+**Shift-mix check (2026-11-14), D15:** the tables, trained on the mixed operation only, were tested under all three shift mixes. With mostly double shifts Q-learning holds up or does better. With mostly single shifts its edge over the best price rule disappears (0.95–1.12). Recorded as a limitation; no retraining per mix.
+
+**`energy/eval/part1.py` (started 2026-11-14):** the tests are written (`tests/test_part1.py`), the module isn't. It will evaluate the committed tables without retraining, including the cross-year check, and write `results/part1/` (`runs.csv`, `summary.csv`, `summary.md`) for the report. Until the module exists, `uv run pytest` fails to collect that file.
+
 ## 3. Simulation tool
 
 Wrap the trained policy in `simulate(policy, dates)` so it returns the decisions and savings for a date range. The dashboard and the agent both use it.
@@ -114,6 +118,35 @@ Build the agent loop with Groq tool calling, with an iteration cap, at least two
 ## 6. Dashboard
 
 Build a Streamlit app with price vs. decisions, cumulative savings, battery parameters the user can change, and a chat with the agent.
+
+**Design agreed (2026-11-14), not implemented yet.** The design starts from the customer's questions: the manager of a plant that buys at the bolsa price (D2).
+1. Is a battery worth it, and what size?
+2. Does a smart controller beat a simple timer?
+3. How much do my shifts and the price year matter?
+4. What would the battery do in a week?
+5. Why did it do that, and is it allowed?
+
+- **UI in Spanish.** No Part 1 results table in the app; those numbers go to the report.
+- **Policies shown:** Q-learning, regla de precio, horario por turnos, noche/día. Perfect foresight and no battery are left out of the app.
+- **Sidebar:**
+  - **Escenario:** "2025 (normal)" or "2024 (El Niño, precios altos)". It defaults to that year's October–December test period, with custom dates in an expander and kept within one year.
+  - **Batería:** 4, 8 or 12 h.
+  - **Tipo de operación:** Mixto, Principalmente turnos dobles, Principalmente un turno (D15 shift-mix check).
+  - **Estado:** whether the Groq key is set and which retriever is in use.
+- **Indicators for the whole period:**
+  - Q-learning's savings.
+  - The difference vs. the best simple rule.
+  - Cycles.
+- **Tabs:**
+  1. **Operación:** one week at a time, chosen with a slider. Price with charge and discharge hours, factory-off hours shaded, and the state of charge, for one policy ("Política mostrada", default Q-learning).
+  2. **Comparación:** cumulative savings of the four policies, plus savings by battery size and policy.
+  3. **Asistente:** chat with the sidebar's battery and period passed as `UserSettings`. Each answer has an expander with the tools, citations, retriever and stop reason. Groq is used only when a message is sent.
+  4. **Acerca de:**
+     - data sources and the method
+     - the limitations, in plain language: bolsa price not the regulated tariff, synthetic shifts, model trained on the mixed operation, no battery wear, savings measured against no battery
+     - "compare with your supplier's quote", since there is no cost data
+- **Build:** `energy/app/charts.py` holds pure Plotly functions and the indicator calculations, tested offline. `app.py` is thin, with `st.cache_data` for prices and simulations and `st.cache_resource` for the retriever and agent. There's also an `AppTest` smoke test with no Groq key.
+- **Open point:** the agent's `simulate_battery` always uses the mixed operation (D16), so the chat won't follow the "Tipo de operación" selector unless `UserSettings` gains a mix. Decide when building the chat tab.
 
 **Obstacles:**
 

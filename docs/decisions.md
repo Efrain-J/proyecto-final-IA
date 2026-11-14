@@ -373,6 +373,29 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 
 **Small side effect:** the tuned price rule's cut-offs depend on the training shift patterns. For 4 h, seed 0 now picks worse cut-offs (2.09 M against 2.50 M). The 4 h comparison isn't affected, because the shift schedule is the best rule there.
 
+**Shift-mix robustness check (2026-11-14).** The tables were trained on the `default` mix only. Before offering the mix as a dashboard choice, every year's tables were tested on October–December of the same year under all three mixes, over the 5 test shift patterns. That's 540 simulations, 4.6 s, from a scratchpad script. The `default` rows reproduce the numbers above. The strongest rule includes the price rule with the other year's cut-offs, as above.
+
+*Q-learning ÷ strongest rule (range over the 5 patterns where it matters):*
+
+| Battery | Test year | `default` (trained on) | `mostly_double` | `mostly_single` |
+|---|---|---|---|---|
+| 4 h | 2025 | 0.99 | 0.99 | 0.98 (0.90–1.06) |
+| 4 h | 2024 | 0.91 | 0.92 | 0.91 |
+| 8 h | 2025 | 1.05 | 1.10 | 0.97 (0.90–1.04) |
+| 8 h | 2024 | 1.10 | 1.16 | 1.02 (0.93–1.13) |
+| 12 h | 2025 | 1.15 | 1.12 | 1.12 |
+| 12 h | 2024 | 1.00 | 1.06 | 0.95 (0.88–1.05) |
+
+*Findings:*
+- **Mostly double shifts:** Q-learning holds up or does better (+6 to +16% for 8 h and 12 h). More operating hours mean more hours to discharge, which is the situation it learned.
+- **Mostly single shifts:** the edge disappears. For 8 h 2025 and 12 h 2024 Q-learning is slightly below the best price rule (0.97 and 0.95). The training mix has 45% full-shift days, so this mix is outside what the model saw.
+- **4 h:** the shift schedule wins under every mix, as before.
+- **The type of operation matters more than the controller.** For the same battery, savings are about 35–40% higher with mostly double shifts and about 30% lower with mostly single shifts.
+
+*Decision:*
+- **Offer the mix in the dashboard** as "Tipo de operación": `default` = "Mixto", `mostly_double` = "Principalmente turnos dobles", `mostly_single` = "Principalmente un turno". Show the results as they are, and state in the app that the model was trained on the mixed operation.
+- **Don't train one model per mix.** `train.py --mix` exists, but the policy file names don't include the mix. It would mean changing an interface and keeping 18 tables, which is beyond MVP.
+
 ## D16. LLM agent: hand-written loop, two tools, checked citations
 
 **Decided and implemented 2026-11-13** in `energy/agent/`, written test-first.
@@ -553,4 +576,5 @@ Until then, nothing reads the CSV.
   - The parameters were tuned on the 8 h battery only.
   - In the October–December 2024 crisis, Q-learning captures only 50–58% of perfect foresight.
   - The tuned price rule's cut-offs don't carry over well across a regime change, so results are compared against the strongest available rule.
+  - The Q-tables were trained on the mixed shift operation only. For a plant running mostly single shifts, a tuned price rule does as well (0.95–1.12 of it, D15).
 - This is an academic prototype, not financial, legal or regulatory advice.

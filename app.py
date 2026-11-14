@@ -1,0 +1,333 @@
+"""Streamlit dashboard: a battery for a Colombian plant, with a regulation assistant.
+
+Run from the repo root::
+
+    uv run streamlit run app.py
+
+Inputs: the committed XM prices, the saved Q-tables and the RAG index/chunks. The sidebar
+(scenario, battery, shift mix) builds one `UserSettings` that feeds both the charts and
+the chat agent, so the assistant answers for the scenario on screen (D16). Without
+`GROQ_API_KEY` the assistant shows retrieved passages only; without `NVIDIA_API_KEY` the
+search falls back to BM25. All figures come from `energy.app.model` (pure) and
+`energy.app.charts` (plotly); this file only wires them to widgets (architecture §9).
+"""
+from __future__ import annotations
+
+import os
+from datetime import date
+from typing import Any
+
+import pandas as pd
+import streamlit as st
+
+from energy import config
+from energy.agent.loop import AgentResult, open_agent, run_agent
+from energy.agent.render import POLICY_NAMES, cop, pct
+from energy.agent.settings import DATA_FIRST_DAY, DATA_LAST_DAY, UserSettings
+from energy.app import charts, model
+from energy.data.prices import load_prices
+from energy.rag.retrieve import open_retriever
+from energy.rl.battery import PRESETS
+from energy.rl.features import add_relative_price
+
+MESSAGES_KEY = "mensajes"
+
+
+def error_text(exc: BaseException) -> str:
+    """One-line description of an exception for `st.error`."""
+    return f"{type(exc).__name__}: {exc}"
+
+
+# --------------------------------------------------------------------------- cached data
+
+
+@st.cache_data(show_spinner="Cargando precios…")
+def featured_prices() -> pd.DataFrame:
+    """Hourly prices with the relative-price feature the policies need."""
+    return add_relative_price(load_prices())
+
+
+@st.cache_data(show_spinner="Simulando la operación…")
+def cached_runs(preset: str, start: date, end: date, mix: str) -> dict[str, model.PolicyRun]:
+    """Policy runs for the sidebar choice (hashable arguments only)."""
+    return model.run_policies(featured_prices(), preset, start, end, mix)
+
+
+@st.cache_data(show_spinner="Comparando tamaños de batería…")
+def cached_sizes(start: date, end: date, mix: str) -> pd.DataFrame:
+    """Savings per battery size for the sidebar period and mix."""
+    return model.size_comparison(featured_prices(), start, end, mix)
+
+
+@st.cache_resource(show_spinner="Abriendo el asistente…")
+def load_agent() -> tuple[Any, Any, str | None, str | None]:
+    """Open the retriever and the agent once per server process.
+
+    Returns:
+        ``(registry, chat, retriever_name, None)`` or ``(None, None, None, error)``.
+        One shared retriever: Qdrant local mode takes a file lock (architecture §9).
+    """
+    try:
+        retriever = open_retriever()
+        registry, chat = open_agent(retriever)
+        return registry, chat, retriever.name, None
+    except Exception as exc:  # noqa: BLE001 - the app must keep running without the agent
+        return None, None, None, error_text(exc)
+
+
+# --------------------------------------------------------------------------- sidebar
+
+
+def _period_widgets() -> tuple[date, date]:
+    """Scenario radio plus optional custom dates; returns the period to simulate."""
+    scenario = st.sidebar.radio("Escenario", list(model.SCENARIOS), key="escenario")
+    start, end = model.SCENARIOS[scenario]
+    with st.sidebar.expander("Fechas personalizadas"):
+        if st.checkbox("Usar otro periodo", key="fechas_custom"):
+            picked = st.date_input(
+                "Periodo (mismo año)", value=(start, end), min_value=DATA_FIRST_DAY,
+                max_value=DATA_LAST_DAY, key="rango",
+            )
+            # Mid-selection the widget returns a 1-tuple: keep the scenario dates meanwhile.
+            if isinstance(picked, (tuple, list)) and len(picked) == 2:
+                start, end = picked
+            else:
+                st.info("Elige también la fecha final.")
+    return start, end
+
+
+def sidebar() -> tuple[UserSettings, str]:
+    """Draw the sidebar and return the validated settings and the shift mix id."""
+    st.sidebar.header("Parámetros")
+    start, end = _period_widgets()
+    preset = st.sidebar.selectbox(
+        "Batería", list(PRESETS), index=list(PRESETS).index(config.DEFAULT_PRESET),
+        format_func=lambda p: PRESETS[p].label, key="bateria",
+    )
+    mix = st.sidebar.selectbox(
+        "Tipo de operación", list(model.MIX_LABELS), format_func=model.MIX_LABELS.get,
+        key="operacion",
+    )
+    try:
+        settings = UserSettings(preset, start, end)
+    except ValueError as exc:
+        st.sidebar.error(str(exc))
+        st.stop()
+
+    st.sidebar.subheader("Estado")
+    if os.environ.get("GROQ_API_KEY"):
+        st.sidebar.caption("Groq: clave configurada")
+    else:
+        st.sidebar.caption("Groq: sin clave (el asistente solo mostrará pasajes)")
+    retriever_name = load_agent()[2]
+    if retriever_name == "qdrant-nvidia":
+        st.sidebar.caption("Búsqueda: Qdrant + NVIDIA")
+    else:
+        st.sidebar.caption("Búsqueda: BM25 (sin conexión)")
+    return settings, mix
+
+
+# --------------------------------------------------------------------------- indicators
+
+
+def indicators(runs: dict[str, model.PolicyRun]) -> None:
+    """Three headline metrics: Q-learning savings, gain over the best rule, cycles."""
+    kpis = model.compute_kpis(runs)
+    rule = POLICY_NAMES[kpis.best_rule_id]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ahorro con Q-learning", cop(kpis.q_savings_cop))
+    c2.metric(
+        "Frente a la mejor regla simple",
+        pct(kpis.q_vs_best_rule_pct) if kpis.q_vs_best_rule_pct is not None else "—",
+        help=f"La mejor regla simple en este caso: {rule} ({cop(kpis.best_rule_savings_cop)}).",
+    )
+    c3.metric("Ciclos de la batería", f"{kpis.q_cycles:.1f}")
+    st.caption("Promedio de 5 calendarios de turnos simulados, periodo completo.")
+
+
+# --------------------------------------------------------------------------- tabs
+
+
+def tab_operacion(runs: dict[str, model.PolicyRun], settings: UserSettings) -> None:
+    """Price, charge/discharge actions and state of charge for one week."""
+    try:
+        pid = st.selectbox(
+            "Política mostrada", list(model.APP_POLICIES), format_func=POLICY_NAMES.get,
+            key="politica",
+        )
+        run = runs[pid]
+        if run.policy_used != pid:
+            st.warning(
+                "Falta la tabla entrenada de esta política; se muestra el horario por turnos."
+            )
+        n = model.n_weeks(run.hourly)
+        # Reset before the widget exists: a stale value above the new max would raise.
+        if st.session_state.get("semana", 1) > n:
+            st.session_state["semana"] = 1
+        week = st.slider("Semana", 1, n, key="semana") if n > 1 else 1
+        st.plotly_chart(
+            charts.operation_figure(
+                model.week_slice(run.hourly, week - 1), settings.preset, POLICY_NAMES[pid]
+            ),
+            width="stretch",
+        )
+        st.caption(
+            "Línea gris: precio de la energía. Triángulos verdes: la batería carga (compra); "
+            "rojos: descarga (ahorra). Zonas grises: fábrica apagada, la batería no puede "
+            "descargar. Abajo: nivel de carga. Se muestra el calendario de turnos 1 de 5."
+        )
+    except Exception as exc:  # noqa: BLE001 - no exception may reach the top level
+        st.error(error_text(exc))
+
+
+def tab_comparacion(runs: dict[str, model.PolicyRun], settings: UserSettings, mix: str) -> None:
+    """Cumulative savings per strategy and savings per battery size."""
+    try:
+        st.plotly_chart(charts.cumulative_figure(runs), width="stretch")
+        st.caption(
+            "Las cuatro estrategias durante todo el periodo. Haz clic en la leyenda para "
+            "ocultar líneas."
+        )
+        sizes = cached_sizes(settings.start, settings.end, mix)
+        st.plotly_chart(charts.size_figure(sizes), width="stretch")
+        st.caption(
+            "¿Qué tamaño conviene? Compara el ahorro con la cotización de tu proveedor; "
+            "aquí no hay costos de batería."
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.error(error_text(exc))
+
+
+def _details(result: AgentResult) -> dict[str, Any]:
+    """Serializable summary of one agent run for the "Detalles" expander."""
+    return {
+        "tool_calls": [
+            {"name": c.name, "arguments": c.arguments, "ok": c.ok, "error": c.error}
+            for c in result.tool_calls
+        ],
+        "citations": result.citations,
+        "unverified": result.unverified_citations,
+        "retriever": result.retriever,
+        "stopped": result.stopped,
+    }
+
+
+def _show_details(details: dict[str, Any]) -> None:
+    with st.expander("Detalles"):
+        st.markdown("**Herramientas usadas**")
+        if not details["tool_calls"]:
+            st.write("Ninguna.")
+        for call in details["tool_calls"]:
+            status = "ok" if call["ok"] else f"error: {call['error']}"
+            st.code(f"{call['name']}({call['arguments']}) -> {status}", language=None)
+        st.markdown("**Fuentes citadas:** " + (", ".join(details["citations"]) or "ninguna"))
+        if details["unverified"]:
+            st.markdown("**Citas sin verificar:** " + ", ".join(details["unverified"]))
+        st.markdown(f"**Búsqueda:** {details['retriever'] or '-'}")
+        st.markdown(f"**Motivo de parada:** {details['stopped']}")
+
+
+def tab_asistente(settings: UserSettings) -> None:
+    """Chat with the agent, using the sidebar battery and period."""
+    try:
+        st.caption(
+            "El asistente usa la batería y el periodo de la barra lateral y simula la "
+            "operación Mixta."
+        )
+        messages: list[dict[str, Any]] = st.session_state.setdefault(MESSAGES_KEY, [])
+        if st.button("Nueva conversación", key="nueva"):
+            st.session_state[MESSAGES_KEY] = []
+            st.rerun()
+        for msg in messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("details"):
+                    _show_details(msg["details"])
+
+        question = st.chat_input("Pregunta sobre tu batería o la regulación…")
+        if not question:
+            return
+        history = [{"role": m["role"], "content": m["content"]} for m in messages]
+        messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+        registry, chat, _, load_error = load_agent()
+        if load_error:
+            st.error(f"No se pudo abrir el asistente: {load_error}")
+            return
+        with st.chat_message("assistant"):
+            with st.spinner("Pensando…"):
+                result = run_agent(question, history, registry, chat, settings=settings)
+            st.markdown(result.answer)
+            details = _details(result)
+            _show_details(details)
+        messages.append({"role": "assistant", "content": result.answer, "details": details})
+    except Exception as exc:  # noqa: BLE001
+        st.error(error_text(exc))
+
+
+def tab_acerca() -> None:
+    """Data, method and limitations in plain language."""
+    st.markdown(
+        """
+### Datos
+- **Precio de bolsa horario** (`PrecBolsNaci`) publicado por XM, 2024–2025. Se guarda una
+  copia en el repositorio, así que la aplicación funciona sin conexión.
+- **Normativa**: resoluciones de la CREG y documentos de XM sobre almacenamiento con baterías.
+  El asistente responde con estos textos y cita la fuente.
+
+### Método
+Un programa aprende, por ensayo y error sobre los precios de enero a septiembre, a decidir
+cada hora si **cargar**, **descargar** o **esperar** (Q-learning tabular, D14/D15). Se
+evalúa en octubre–diciembre, que no vio al entrenar, y se compara con reglas simples
+(umbral de precio, horario por turnos, carga nocturna y descarga diurna). El ahorro se mide
+frente a no tener batería.
+
+### Limitaciones
+- El precio de bolsa **no es tu tarifa**: tu contrato puede ser muy distinto.
+- Los turnos de la fábrica son **simulados**, no tu calendario real.
+- El modelo se entrenó con operación mixta; con un solo turno una regla de precio rinde igual.
+- No se modela el desgaste de la batería.
+- El ahorro es frente a no tener batería y **no incluye costos de inversión**: compáralo con
+  la cotización de tu proveedor.
+- Prototipo académico: no es asesoría legal ni financiera.
+"""
+    )
+
+
+# --------------------------------------------------------------------------- main
+
+
+def main() -> None:
+    """Page entry point."""
+    st.set_page_config(page_title="Batería inteligente", layout="wide")
+    config.load_env()  # via the module so tests can replace it (never loads real keys)
+    st.title("Batería inteligente para tu planta")
+    settings, mix = sidebar()
+    st.caption(model.status_line(settings.preset, settings.start, settings.end, mix))
+    st.warning(
+        "Prototipo académico: no es asesoría legal ni financiera. Los turnos de la fábrica "
+        "son simulados y el ahorro se mide frente a no tener batería."
+    )
+    try:
+        runs = cached_runs(settings.preset, settings.start, settings.end, mix)
+        indicators(runs)
+    except Exception as exc:  # noqa: BLE001
+        st.error(error_text(exc))
+        runs = None
+
+    t_op, t_cmp, t_chat, t_about = st.tabs(["Operación", "Comparación", "Asistente", "Acerca de"])
+    with t_op:
+        if runs is not None:
+            tab_operacion(runs, settings)
+    with t_cmp:
+        if runs is not None:
+            tab_comparacion(runs, settings, mix)
+    with t_chat:
+        tab_asistente(settings)
+    with t_about:
+        tab_acerca()
+
+
+if __name__ == "__main__":
+    main()
