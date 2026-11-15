@@ -20,7 +20,7 @@ El usuario al que hiría dirijido este proyecto, es un usuario no regulado que p
 
 - Python 3.12.
 - [uv](https://docs.astral.sh/uv/), recomendado, o `pip`.
-- Claves de API. La aplicación funciona parcialmente sin ellas:
+- Claves de API, gratuitas: Groq en https://console.groq.com y NVIDIA en https://build.nvidia.com. La aplicación funciona parcialmente sin ellas:
 
 | Clave | Para qué | Sin la clave |
 |---|---|---|
@@ -28,6 +28,14 @@ El usuario al que hiría dirijido este proyecto, es un usuario no regulado que p
 | `NVIDIA_API_KEY` | Búsqueda semántica (embeddings + Qdrant) | La búsqueda usa BM25 sobre `data/corpus/chunks.jsonl` |
 
 ## Cómo ejecutarlo
+
+Hay dos opciones.
+
+### Opción 1: demo en línea (sin instalar nada)
+
+Abre **<URL de la demo>**. La aplicación está publicada en Streamlit Community Cloud, con las claves guardadas como secretos del servidor, así que el asistente y la búsqueda semántica funcionan completos. Tarda cerca de un minuto en iniciar.
+
+### Opción 2: instalación local
 
 1. Clonar el repositorio:
 
@@ -50,29 +58,35 @@ El usuario al que hiría dirijido este proyecto, es un usuario no regulado que p
    pip install -r requirements.txt
    ```
 
-3. Opcional: configurar las claves.
+3. Opcional: configurar las claves. El índice de búsqueda semántica (`data/qdrant/`) ya está en el repositorio, así que con `NVIDIA_API_KEY` basta. Solo hay que reconstruirlo (`uv run python -m energy.rag.index`) si cambia el corpus.
 
    ```bash
    cp .env.example .env          # luego escribe tus claves en .env
    ```
 
-4. Si tienes `NVIDIA_API_KEY`: construir el índice de búsqueda semántica. Tarda unos 45 s. Sin él, la búsqueda usa BM25.
-
-   ```bash
-   uv run python -m energy.rag.index
-   ```
-
-5. Abrir el dashboard. Queda en http://localhost:8501.
+4. Abrir el dashboard. Queda en http://localhost:8501.
 
    ```bash
    uv run streamlit run app.py
    ```
 
-6. Correr las pruebas. No necesitan internet ni claves.
+5. Correr las pruebas. No necesitan internet ni claves.
 
    ```bash
    uv run pytest
    ```
+
+### Publicar una copia propia en Streamlit Cloud
+
+1. Entra a https://share.streamlit.io con GitHub y crea una app desde este repositorio: rama `main`, archivo `app.py`.
+2. En **Advanced settings**, elige Python 3.12 y escribe los secretos:
+
+   ```toml
+   GROQ_API_KEY = "..."
+   NVIDIA_API_KEY = "..."
+   ```
+
+   Las claves nunca quedan en el repositorio. Localmente, `.env` sigue funcionando igual y tiene prioridad sobre los secretos.
 
 ### Reproducir los resultados (opcional)
 
@@ -99,7 +113,7 @@ uv run python -m energy.data.xm_prices     # precios de bolsa de XM -> data/proc
 uv run python -m energy.data.corpus        # documentos de data/corpus/sources.csv -> data/corpus/raw/
 uv run python -m energy.rag.clean          # -> data/corpus/clean/
 uv run python -m energy.rag.chunk          # -> data/corpus/chunks.jsonl
-uv run python -m energy.rag.index          # -> data/qdrant/ (necesita NVIDIA_API_KEY)
+uv run python -m energy.rag.index          # -> data/qdrant/ (necesita NVIDIA_API_KEY; luego haz commit del índice)
 ```
 
 ## Organización del repositorio

@@ -205,3 +205,25 @@ def test_history_sits_above_the_chat_input(at: AppTest) -> None:
     first_message = min(i for i, k in enumerate(kinds) if k == "Block" or k == "ChatMessage")
     chat_input = kinds.index("ChatInput")
     assert first_message < chat_input
+
+
+# --- Streamlit Cloud secrets (D17) ---
+
+
+def test_secrets_fill_a_missing_key(at: AppTest) -> None:
+    import os
+
+    at.secrets["GROQ_API_KEY"] = "gsk-from-secrets"
+    at.run()
+    assert not at.exception
+    assert os.environ.get("GROQ_API_KEY") == "gsk-from-secrets"
+
+
+def test_secrets_never_override_the_environment(at: AppTest, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-from-env")  # what .env or the shell set
+    at.secrets["GROQ_API_KEY"] = "gsk-from-secrets"
+    at.run()
+    assert not at.exception
+    assert os.environ.get("GROQ_API_KEY") == "gsk-from-env"

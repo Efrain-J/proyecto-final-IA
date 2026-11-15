@@ -220,7 +220,7 @@ def simulate(policy: str | Policy, start: date, end: date,
    - The embedded and BM25 text is `embedding_text(chunk)`: title + article/annex header + text.
    - **Everything else** uses `RecursiveCharacterTextSplitter` (~900 / 120, drop chunks under 30 characters).
    - Metadata comes from the manifest. Output: `chunks.jsonl`.
-4. **Index** (Implemented, D13): `rag/index.py`. NVIDIA `nemotron-3-embed-1b` → Qdrant at `data/qdrant/` (cosine, embedding dimension probed at runtime). Run once; the app only opens it. The index is **not committed** (D8).
+4. **Index** (Implemented, D13): `rag/index.py`. NVIDIA `nemotron-3-embed-1b` → Qdrant at `data/qdrant/` (cosine, embedding dimension probed at runtime). Run once; the app only opens it. The index is committed since 2026-11-14 (D17); rebuild and recommit it after a corpus change.
 5. **Retrieve** (Implemented, D13): `rag/retrieve.py`.
 
 ```python
@@ -348,7 +348,7 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
 | `data/corpus/raw/`, `data/corpus/sources.csv` | Yes | `uv run python -m energy.data.corpus` |
 | `data/corpus/clean/` | Yes | `uv run python -m energy.rag.clean` |
 | `data/corpus/chunks.jsonl` | Yes (planned) | `rag.chunk` |
-| `data/qdrant/` | **No** (D8) | `rag.index`; needs `NVIDIA_API_KEY` |
+| `data/qdrant/` | Yes, except `.lock` (D17) | `rag.index`; needs `NVIDIA_API_KEY` |
 | `artifacts/policies/` | Yes | `uv run python -m energy.rl.train --scenarios 2025` (seeded, about 4 s) |
 | `results/` | Yes | `eval.part1`, `eval.agent_eval`, `eval.tune_q` |
 

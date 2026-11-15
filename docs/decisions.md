@@ -511,6 +511,27 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
   - **Decision: no prompt fix and no second run for this delivery.** The cost in tokens and time isn't worth it this close to the deadline. The fixes are clear (search before refusing; an explicit scope and anti-injection rule), and they are recorded as limitations instead. The YAML expectations were not changed after seeing the answers.
   - **Runner change:** `agent_eval` now writes after every question and merges by id (`--ids` replaces only those rows; `--fresh` starts empty). The summary lists the questions answered by the fallback model.
 
+## D17. Hosted demo on Streamlit Community Cloud, with the index committed
+
+**Decided 2026-11-14.**
+
+**Why:** the grader may not set up any keys, and the keys must never be in the public repo. A hosted copy keeps them as server-side secrets, so anyone with access gets the full app: Groq answers and semantic search.
+
+**Secrets bridge (`app.load_secrets()`):**
+- **Order:** the shell environment first, then `.env` (`config.load_env`, `override=False`), then `st.secrets`. `load_secrets()` copies `GROQ_API_KEY` and `NVIDIA_API_KEY` from the secrets only when the variable isn't already set, so a local `.env` always wins.
+- **No `secrets.toml`:** reading `st.secrets` raises; the helper catches it and does nothing.
+- **Location:** it lives in `app.py` because `energy/config.py` must not import Streamlit.
+- **Local secrets file:** `.streamlit/secrets.toml` is gitignored.
+
+**The Qdrant index is now committed** (`data/qdrant/`, 20 MB, without the `.lock` files). This reverses the 2026-11-12 decision.
+- **Reason:** without the index in git, every clone, Cloud included, fell back to BM25 even with `NVIDIA_API_KEY`. The cold run showed it.
+- **No dirty tree:** opening the index doesn't modify the files.
+- **Caveat:** after rerunning `energy.rag.index`, commit the index again, or the app will search an outdated corpus.
+
+**Sharing:**
+- Anyone with the URL spends our Groq quota. So: use dedicated keys, revoke them after grading, and prefer a private app with invited viewers (the professor).
+- The app sleeps without traffic. Open it before the demo.
+
 ## D10. Call XM's API directly instead of `pydataxm`
 
 **Status:** Decided (2026-11-12)
@@ -556,7 +577,7 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 `data/` is committed to the repo (it's no longer in `.gitignore`), so the CSV snapshot works offline and on any machine, and the README needs no download step to run the app. The download script stays in the repo to show how the data was obtained.
 
 - Keep the committed files small: one year of hourly prices is a small CSV.
-- **Decided (2026-11-12): the Qdrant index (`data/qdrant/`) stays gitignored** and is rebuilt with a script. It's binary, rewritten on every rebuild, and has a machine-local lock file. Querying needs `NVIDIA_API_KEY` anyway; without the key, the planned fallback is BM25 over the committed chunks (see `architecture.md`).
+- **Reversed on 2026-11-14 by D17, which now commits the index.** Original decision (2026-11-12): the Qdrant index (`data/qdrant/`) stays gitignored and is rebuilt with a script. It's binary, rewritten on every rebuild, and has a machine-local lock file. Querying needs `NVIDIA_API_KEY` anyway; without the key, the planned fallback is BM25 over the committed chunks (see `architecture.md`).
 - **Resolved:** the corpus PDFs are committed. `.gitignore` no longer excludes `*.pdf`; only the assignment PDF is ignored.
 - `docs/` is tracked as well (2026-11-12): the decision log and architecture are evidence for the report.
 

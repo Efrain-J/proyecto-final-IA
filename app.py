@@ -30,6 +30,7 @@ from energy.rag.retrieve import open_retriever
 from energy.rl.battery import PRESETS
 from energy.rl.features import add_relative_price
 
+SECRET_KEYS = ("GROQ_API_KEY", "NVIDIA_API_KEY")
 MESSAGES_KEY = "mensajes"
 CUSTOM_PERIOD = "Personalizado"
 SUGGESTED_KEY = "pregunta_sugerida"
@@ -362,10 +363,28 @@ frente a no tener batería.
 # --------------------------------------------------------------------------- main
 
 
+def load_secrets() -> None:
+    """Copy the API keys from ``st.secrets`` into the environment when they are missing.
+
+    Streamlit Cloud provides the keys as secrets (D17). The environment, filled first by
+    the shell and then by ``.env``, always wins, so a local run behaves as before.
+    """
+    for key in SECRET_KEYS:
+        if os.environ.get(key):
+            continue
+        try:
+            value = st.secrets.get(key)
+        except Exception:  # noqa: BLE001 - no secrets.toml raises, and its type varies by version
+            return
+        if value:
+            os.environ[key] = str(value)
+
+
 def main() -> None:
     """Page entry point."""
     st.set_page_config(page_title="Batería inteligente", layout="wide")
     config.load_env()  # via the module so tests can replace it (never loads real keys)
+    load_secrets()  # Streamlit Cloud secrets (D17)
     st.title("Carga inteligente de batería para tu planta")
     settings, mix = sidebar()
     st.caption(model.status_line(settings.preset, settings.start, settings.end, mix))
