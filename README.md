@@ -4,9 +4,9 @@ Proyecto final de Inteligencia Artificial (SI3003, 2026), escenario 3.3.
 
 Por Efraín Jurado Torres
 
-El usuario al que hiría dirijido este proyecto, es un usuario no regulado que paga la energía al precio de bolsa de Colombia. Supongamos que este usuario tiene una fabrica que requiere de electricidad. El usuario quiere saber cuánto ahorraría con una batería que compre energía en las horas baratas y la use en las caras mientras la fábrica funciona. El proyecto tiene tres partes:
+El usuario al que iría dirigido este proyecto es un usuario no regulado que paga la energía al precio de bolsa de Colombia. Supongamos que este usuario tiene una fábrica que requiere de electricidad. El usuario quiere saber cuánto ahorraría con una batería que compre energía en las horas baratas y la use en las caras mientras la fábrica funciona. El proyecto tiene tres partes:
 
-- **Parte 1, la batería (MDP + Q-learning).** Una política Q-learning tabular decide cada hora si cargar, descargar o esperar, según el precio y los turnos de la fábrica. Se compara con unas politicas de reglas fijas y con la previsión perfecta, usando precios reales de XM (2024–2025). Los resultados están en `results/part1/summary.md`.
+- **Parte 1, la batería (MDP + Q-learning).** Una política Q-learning tabular decide cada hora si cargar, descargar o esperar, según el precio y los turnos de la fábrica. Se compara con unas políticas de reglas fijas y con la previsión perfecta, usando precios reales de XM (2024–2025). Los resultados están en `results/part1/summary.md`.
 - **Asistente RAG.** Un agente LLM (Groq) responde preguntas sobre la regulación (CREG, XM) citando sus fuentes, y simula la batería con el modelo de la Parte 1. Tiene dos herramientas: `search_regulation` y `simulate_battery`. Su evaluación realizada con 11 preguntas está en `results/agent_eval/`.
 - **Dashboard en Streamlit.** Tiene cuatro pestañas:
   - **Operación:** la operación hora a hora.
@@ -75,18 +75,6 @@ Abre **[proyecto-final-ia-2gu6ukfurpuqmts3fz7x37.streamlit](https://proyecto-fin
    ```bash
    uv run pytest
    ```
-
-### Publicar una copia propia en Streamlit Cloud
-
-1. Entra a https://share.streamlit.io con GitHub y crea una app desde este repositorio: rama `main`, archivo `app.py`.
-2. En **Advanced settings**, elige Python 3.12 y escribe los secretos:
-
-   ```toml
-   GROQ_API_KEY = "..."
-   NVIDIA_API_KEY = "..."
-   ```
-
-   Las claves nunca quedan en el repositorio. Localmente, `.env` sigue funcionando igual y tiene prioridad sobre los secretos.
 
 ### Reproducir los resultados (opcional)
 
