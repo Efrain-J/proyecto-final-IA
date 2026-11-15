@@ -26,7 +26,7 @@ from typing import Any, Literal
 import pandas as pd
 
 from energy import config
-from energy.agent.llm import ChatFn, LLMError, make_groq_chat
+from energy.agent.llm import ChatFn, ChatReply, LLMError, MissingKeyError, make_groq_chat
 from energy.agent.prompts import REFUSAL, system_prompt
 from energy.agent.render import render_results
 from energy.agent.settings import UserSettings
@@ -66,6 +66,9 @@ class AgentResult:
         simulations: Successful ``simulate_battery`` results, in call order.
         results_block: Deterministic rendering of ``simulations``, or "".
         model_text: What the model wrote (tables removed when a block exists).
+        error: Technical message of the ``LLMError`` when ``stopped == "llm_error"``, else None.
+        models: Model id of every chat call in order ("?" when unknown), for "Detalles" and
+            the fallback-model notice in the app (D16).
     """
 
     answer: str
@@ -77,6 +80,8 @@ class AgentResult:
     simulations: list[dict[str, Any]] = field(default_factory=list)
     results_block: str = ""
     model_text: str = ""
+    error: str | None = None
+    models: list[str] = field(default_factory=list)
 
 
 def _strip_tables(text: str) -> str:
@@ -136,16 +141,40 @@ def _split_citations(answer: str, retrieved: set[str]) -> tuple[list[str], list[
     return valid, unverified
 
 
-def _fallback_answer(error: Exception, registry: dict[str, Tool], question: str) -> str:
-    """Retrieval-only answer when the model is unavailable."""
-    lines = [f"No pude consultar el modelo de lenguaje ({error}). Estos son los fragmentos más relevantes:"]
+NO_KEY_TEXT = (
+    "El asistente no tiene configurado el modelo de lenguaje (falta la clave de Groq), "
+    "así que no puede redactar una respuesta ni simular."
+)
+LLM_DOWN_TEXT = "El modelo de lenguaje no está disponible en este momento (límite de uso o conexión)."
+FALLBACK_INTRO = "Estos son los pasajes de la normativa más relevantes para tu pregunta:"
+FALLBACK_OUTRO = "Para ver el ahorro de tu batería usa las pestañas Operación y Comparación."
+
+
+def _fallback_answer(
+    error: LLMError, registry: dict[str, Tool], question: str
+) -> tuple[str, list[str], str]:
+    """Retrieval-only answer when the model is unavailable.
+
+    Plain Spanish first; the technical message goes to ``AgentResult.error`` instead (D16).
+
+    Returns:
+        ``(text, citas of the passages shown, retriever name)``.
+    """
+    lead = NO_KEY_TEXT if isinstance(error, MissingKeyError) else LLM_DOWN_TEXT
+    lines = [lead, "", FALLBACK_INTRO]
     _, found = run_tool(registry, "search_regulation", json.dumps({"query": question, "k": FALLBACK_HITS}))
+    citas: list[str] = []
     for hit in found.get("hits", [])[:FALLBACK_HITS]:
-        snippet = " ".join(hit["text"].split())[:300]
+        # Drop markdown heading marks ("### Término:" in the XM glossary): inside a bullet
+        # they render as big headings in the app.
+        plain = re.sub(r"#{1,6}\s*", "", hit["text"])
+        snippet = " ".join(plain.split())[:300]
         lines.append(f"- {snippet}... [{hit['cita']}]")
-    if len(lines) == 1:
+        citas.append(hit["cita"])
+    if not citas:
         lines.append(found.get("error") or "No hay fragmentos relevantes.")
-    return "\n".join(lines)
+    lines += ["", FALLBACK_OUTRO]
+    return "\n".join(lines), citas, found.get("retriever", "")
 
 
 def _fill_from_settings(raw: str, settings: UserSettings) -> tuple[str, tuple[str, ...]]:
@@ -207,10 +236,16 @@ def run_agent(
     retriever = ""
     simulations: list[dict[str, Any]] = []
     answer, stopped = "", "answer"
+    models: list[str] = []
+
+    def ask(msgs: list[dict], tools: list[dict] | None) -> ChatReply:
+        reply = chat(msgs, tools)
+        models.append(reply.model or "?")  # same convention as the evaluation's recorder
+        return reply
 
     try:
         for _ in range(t_max):
-            reply = chat(messages, schemas)
+            reply = ask(messages, schemas)
             if not reply.tool_calls:
                 answer = reply.content or ""
                 break
@@ -255,21 +290,23 @@ def run_agent(
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": raw})
         else:  # rounds used up: one last call with tools off
             stopped = "t_max"
-            answer = chat(messages + [{"role": "user", "content": NUDGE}], None).content or ""
+            answer = ask(messages + [{"role": "user", "content": NUDGE}], None).content or ""
     except LLMError as exc:
         logger.warning("LLM failed: %s", exc)
-        text = _fallback_answer(exc, registry, question)
+        text, citas, found_retriever = _fallback_answer(exc, registry, question)
         block = render_results(simulations)
         return AgentResult(
             answer=_compose(block, text),
             tool_calls=records,
-            citations=[],
+            citations=citas,
             unverified_citations=[],
             stopped="llm_error",
-            retriever=retriever,
+            retriever=found_retriever or retriever,
             simulations=simulations,
             results_block=block,
             model_text=text,
+            error=str(exc),
+            models=models,
         )
 
     block = render_results(simulations)
@@ -284,7 +321,7 @@ def run_agent(
         # One repair round, outside t_max: the model sometimes drops or garbles the
         # citations (e.g. a literal 【cita】); keep the original if the repair doesn't help.
         try:
-            repaired = chat(
+            repaired = ask(
                 messages
                 + [{"role": "assistant", "content": answer}, {"role": "user", "content": _repair_request(retrieved_citas)}],
                 None,
@@ -298,7 +335,7 @@ def run_agent(
                 answer, valid, unverified = repaired, new_valid, new_unverified
     return AgentResult(
         _compose(block, answer), records, valid, unverified, stopped, retriever,  # type: ignore[arg-type]
-        simulations, block, answer,
+        simulations, block, answer, None, models,
     )
 
 

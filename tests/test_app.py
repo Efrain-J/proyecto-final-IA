@@ -145,3 +145,63 @@ def test_custom_training_period_shows_in_sample_warning(at: AppTest) -> None:
     at.date_input(key="rango").set_value((date(2025, 3, 1), date(2025, 3, 31))).run()
     assert not at.exception
     assert "entrenar" in _infos(at)
+
+
+# --- assistant tab: layout, example questions, fallback text -----------------------
+
+
+def _example_buttons(at: AppTest) -> list:
+    return [b for b in at.button if (b.key or "").startswith("ejemplo_")]
+
+
+def test_example_questions_show_on_an_empty_chat(at: AppTest) -> None:
+    at.run()
+    assert not at.exception
+    assert len(_example_buttons(at)) == 4
+    assert "Preguntas de ejemplo" in " | ".join(m.value for m in at.markdown)
+
+
+def test_clicking_an_example_asks_it_and_hides_the_buttons(at: AppTest) -> None:
+    at.run()
+    button = _example_buttons(at)[2]
+    text = button.label
+    button.click().run()
+    assert not at.exception
+    messages = list(at.chat_message)
+    assert [m.name for m in messages] == ["user", "assistant"]
+    assert messages[0].markdown[0].value == text
+    assert not _example_buttons(at)
+
+
+def test_example_buttons_are_gone_once_the_chat_has_messages(at: AppTest) -> None:
+    at.run()
+    at.chat_input[0].set_value("¿Qué dice la CREG sobre almacenamiento?").run()
+    assert not at.exception
+    assert not _example_buttons(at)
+    at.button(key="nueva").click().run()
+    assert len(_example_buttons(at)) == 4
+
+
+def test_no_key_answer_is_friendly_and_details_keep_the_technical_error(at: AppTest) -> None:
+    at.run()
+    at.chat_input[0].set_value("¿Qué dice la CREG sobre almacenamiento con baterías?").run()
+    assert not at.exception
+    answer = list(at.chat_message)[1]
+    body = " | ".join(m.value for m in answer.markdown)
+    assert "El asistente no tiene configurado el modelo de lenguaje" in body
+    assert "pasajes de la normativa" in body
+    shown = " | ".join(m.value for m in at.markdown)
+    assert "Error técnico:" in shown and "GROQ_API_KEY no está configurada" in shown
+    assert "Modelo:** -" in shown  # no call succeeded
+    assert "Búsqueda:** -" not in shown  # the retriever name is filled in now
+
+
+def test_history_sits_above_the_chat_input(at: AppTest) -> None:
+    at.run()
+    at.chat_input[0].set_value("¿Qué dice la CREG sobre almacenamiento?").run()
+    assert not at.exception
+    tab = at.tabs[2]
+    kinds = [type(child).__name__ for child in tab.children.values()]
+    first_message = min(i for i, k in enumerate(kinds) if k == "Block" or k == "ChatMessage")
+    chat_input = kinds.index("ChatInput")
+    assert first_message < chat_input

@@ -9,6 +9,7 @@ single ``network`` test calls Groq for real and is skipped without ``GROQ_API_KE
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import os
 from datetime import date
@@ -16,7 +17,7 @@ from datetime import date
 import pytest
 
 from energy import config
-from energy.agent.llm import ChatReply, LLMError, ToolCall
+from energy.agent.llm import ChatReply, LLMError, MissingKeyError, ToolCall
 from energy.agent.loop import AgentResult, ToolCallRecord, open_agent, run_agent
 from energy.agent.prompts import REFUSAL, system_prompt
 from energy.agent.render import cop
@@ -246,7 +247,8 @@ def test_llm_error_after_a_simulation_still_shows_the_block(registry):
     assert result.results_block.startswith("Escenario:")
     assert "**Ahorro promedio:" in result.results_block
     assert result.answer.startswith(result.results_block)
-    assert "caído" in result.model_text or "No pude consultar" in result.model_text
+    assert "caído" in (result.error or "")  # the technical message is kept for "Detalles"
+    assert "no está disponible" in result.model_text
 
 
 def test_citations_are_checked_on_the_model_text_with_a_block_present(registry):
@@ -332,7 +334,6 @@ def test_llm_error_on_first_call_gives_retrieval_only_answer(registry):
     result = run_agent("eficiencia mínima", [], registry, chat)
     assert result.stopped == "llm_error"
     assert f"[{CITA}]" in result.answer
-    assert "GROQ_API_KEY" in result.answer or "error" in result.answer.lower()
 
 
 def test_llm_error_after_tool_round_still_does_not_raise(registry):
@@ -340,6 +341,79 @@ def test_llm_error_after_tool_round_still_does_not_raise(registry):
     result = run_agent("q", [], registry, chat)
     assert result.stopped == "llm_error"
     assert f"[{CITA}]" in result.answer
+
+
+def test_missing_key_gives_a_friendly_answer_with_the_retrieved_passages(registry):
+    chat = ScriptedChat([MissingKeyError("GROQ_API_KEY no está configurada")])
+    result = run_agent("eficiencia mínima", [], registry, chat)
+    assert result.stopped == "llm_error"
+    assert result.answer.startswith("El asistente no tiene configurado el modelo de lenguaje")
+    assert "GROQ_API_KEY" not in result.answer
+    assert "Estos son los pasajes de la normativa más relevantes" in result.answer
+    assert f"[{CITA}]" in result.answer
+    assert "pestañas Operación y Comparación" in result.answer
+    assert result.citations == [CITA]
+    assert result.retriever == "fake"
+    assert result.error == "GROQ_API_KEY no está configurada"
+
+
+def test_other_llm_error_says_the_model_is_unavailable(registry):
+    chat = ScriptedChat([LLMError("429 rate limit")])
+    result = run_agent("eficiencia mínima", [], registry, chat)
+    assert result.answer.startswith("El modelo de lenguaje no está disponible en este momento")
+    assert "falta la clave" not in result.answer
+    assert result.error == "429 rate limit"
+    assert result.citations == [CITA]
+
+
+def test_a_normal_answer_has_no_error(registry):
+    result = run_agent("hola", [], registry, ScriptedChat([say("Hola")]))
+    assert result.error is None
+
+
+# --- models used -----------------------------------------------------------------
+
+
+def test_models_records_each_reply_model_in_order(registry):
+    chat = ScriptedChat(
+        [
+            ChatReply(None, [ask_search()], model="m-a"),
+            ChatReply(f"Texto [{CITA}]", [], model="m-b"),
+        ]
+    )
+    result = run_agent("q", [], registry, chat)
+    assert result.models == ["m-a", "m-b"]
+
+
+def test_a_reply_without_model_is_recorded_as_question_mark(registry):
+    result = run_agent("hola", [], registry, ScriptedChat([say("Hola")]))
+    assert result.models == ["?"]
+
+
+def test_models_includes_the_citation_repair_call(registry):
+    chat = ScriptedChat(
+        [
+            ChatReply(None, [ask_search()], model="m-a"),
+            ChatReply("Sin citas.", [], model="m-a"),
+            ChatReply(f"Con cita [{CITA}]", [], model="m-b"),
+        ]
+    )
+    result = run_agent("q", [], registry, chat)
+    assert result.models == ["m-a", "m-a", "m-b"]
+
+
+def test_models_includes_the_t_max_nudge_call(registry):
+    chat = AlwaysToolCalls()
+    result = run_agent("q", [], registry, chat, t_max=1)
+    assert result.stopped == "t_max"
+    assert result.models == ["?", "?"]
+
+
+def test_models_kept_when_the_llm_fails_after_a_successful_call(registry):
+    chat = ScriptedChat([ChatReply(None, [ask_search()], model="m-a"), LLMError("caído")])
+    result = run_agent("q", [], registry, chat)
+    assert result.stopped == "llm_error"
+    assert result.models == ["m-a"]
 
 
 # --- citations -----------------------------------------------------------------
@@ -592,3 +666,22 @@ def test_model_never_sees_the_figures_shown_in_the_block(registry):
         assert hidden not in observation
     assert "by_hour_block" in observation and "best_rule" in observation
     assert result.simulations[0]["savings_cop"]["mean"] > 0  # the block still has them
+
+
+class HeadingRetriever:
+    """Returns a glossary-style passage with markdown headings, like the XM glossary."""
+
+    name = "fake"
+
+    def search(self, query: str, k: int = 5) -> list[Hit]:
+        text = "### Generación embebida: definición uno. ### Generación filo de agua: definición dos."
+        return [dataclasses.replace(HIT, text=text)][:k]
+
+
+def test_fallback_snippets_drop_markdown_headings():
+    # A "### ..." inside a bullet renders as a big heading in the app; the fallback shows
+    # passages as plain text instead (seen with the XM glossary, 2026-11-14).
+    registry = build_registry(HeadingRetriever(), prices=load_prices())
+    result = run_agent("q", [], registry, ScriptedChat([MissingKeyError("sin clave")]))
+    assert "#" not in result.model_text
+    assert "Generación embebida: definición uno. Generación filo de agua" in result.model_text

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from energy import config
-from energy.agent.llm import ChatReply, LLMError, ToolCall, make_groq_chat
+from energy.agent.llm import ChatReply, LLMError, MissingKeyError, ToolCall, make_groq_chat
 
 MODELS = ("model-a", "model-b")
 SCHEMAS = [{"type": "function", "function": {"name": "t", "description": "d", "parameters": {"type": "object"}}}]
@@ -202,8 +202,9 @@ def test_missing_api_key_raises_llm_error_without_calling_the_client(monkeypatch
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     client = FakeClient([response()])
     chat = make_groq_chat(api_key=None, models=MODELS, client=client)  # must not raise yet
-    with pytest.raises(LLMError, match="GROQ_API_KEY"):
+    with pytest.raises(MissingKeyError, match="GROQ_API_KEY") as exc_info:
         chat(MESSAGES, None)
+    assert isinstance(exc_info.value, LLMError)  # existing `except LLMError` keeps working
     assert client.calls == []
 
 

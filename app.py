@@ -32,6 +32,16 @@ from energy.rl.features import add_relative_price
 
 MESSAGES_KEY = "mensajes"
 CUSTOM_PERIOD = "Personalizado"
+SUGGESTED_KEY = "pregunta_sugerida"
+EXAMPLE_QUESTIONS = (
+    "¿Cuánto ahorro con mi batería en este periodo?",
+    "¿Por qué la batería carga a ciertas horas?",
+    "¿Qué dice la CREG sobre almacenamiento con baterías?",
+    "¿Necesito un permiso para instalar una batería en mi planta?",
+)
+FALLBACK_MODEL_NOTICE = (
+    "Respondió el modelo de respaldo (más pequeño); la explicación puede ser menos precisa."
+)
 
 
 def error_text(exc: BaseException) -> str:
@@ -232,10 +242,18 @@ def _details(result: AgentResult) -> dict[str, Any]:
         "unverified": result.unverified_citations,
         "retriever": result.retriever,
         "stopped": result.stopped,
+        "error": result.error,
+        "models": result.models,
     }
 
 
+def _used_fallback_model(models: list[str]) -> bool:
+    """True when a call was answered by a model other than the preferred one (D16)."""
+    return any(m != "?" and m != config.GROQ_MODELS[0] for m in models)
+
+
 def _show_details(details: dict[str, Any]) -> None:
+    models = ", ".join(dict.fromkeys(details.get("models", []))) or "-"
     with st.expander("Detalles"):
         st.markdown("**Herramientas usadas**")
         if not details["tool_calls"]:
@@ -247,7 +265,19 @@ def _show_details(details: dict[str, Any]) -> None:
         if details["unverified"]:
             st.markdown("**Citas sin verificar:** " + ", ".join(details["unverified"]))
         st.markdown(f"**Búsqueda:** {details['retriever'] or '-'}")
+        st.markdown(f"**Modelo:** {models}")
         st.markdown(f"**Motivo de parada:** {details['stopped']}")
+        if details.get("error"):
+            st.markdown(f"**Error técnico:** {details['error']}")
+
+
+def _show_answer_extras(details: dict[str, Any] | None) -> None:
+    """Fallback-model notice and the "Detalles" expander under an answer."""
+    if not details:
+        return
+    if _used_fallback_model(details.get("models", [])):
+        st.caption(FALLBACK_MODEL_NOTICE)
+    _show_details(details)
 
 
 def tab_asistente(settings: UserSettings) -> None:
@@ -261,29 +291,42 @@ def tab_asistente(settings: UserSettings) -> None:
         if st.button("Nueva conversación", key="nueva"):
             st.session_state[MESSAGES_KEY] = []
             st.rerun()
-        for msg in messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                if msg.get("details"):
-                    _show_details(msg["details"])
-
-        question = st.chat_input("Pregunta sobre tu batería o la regulación…")
-        if not question:
-            return
+        # The history lives in a container created before the input, so a new answer is
+        # drawn above it instead of below the input (D16 chat fixes, 2026-11-14).
+        history_box = st.container()
+        # Both the typed and the suggested question go through the same flow. The input is
+        # read before the history is drawn, so the example buttons never survive a question.
+        question = st.chat_input("Pregunta sobre tu batería o la regulación…") or st.session_state.pop(
+            SUGGESTED_KEY, None
+        )
         history = [{"role": m["role"], "content": m["content"]} for m in messages]
-        messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-        registry, chat, _, load_error = load_agent()
-        if load_error:
-            st.error(f"No se pudo abrir el asistente: {load_error}")
-            return
-        with st.chat_message("assistant"):
-            with st.spinner("Pensando…"):
-                result = run_agent(question, history, registry, chat, settings=settings)
-            st.markdown(result.answer)
-            details = _details(result)
-            _show_details(details)
+        if question:
+            messages.append({"role": "user", "content": question})
+        with history_box:
+            if not messages:
+                st.markdown("**Preguntas de ejemplo**")
+                for i, text in enumerate(EXAMPLE_QUESTIONS):
+                    st.button(
+                        text, key=f"ejemplo_{i}", on_click=st.session_state.__setitem__,
+                        args=(SUGGESTED_KEY, text),
+                    )
+                st.caption("Cada pregunta usa el modelo de lenguaje (cuota diaria de Groq).")
+            for msg in messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    _show_answer_extras(msg.get("details"))
+            if not question:
+                return
+            registry, chat, _, load_error = load_agent()
+            if load_error:
+                st.error(f"No se pudo abrir el asistente: {load_error}")
+                return
+            with st.chat_message("assistant"):
+                with st.spinner("Pensando…"):
+                    result = run_agent(question, history, registry, chat, settings=settings)
+                st.markdown(result.answer)
+                details = _details(result)
+                _show_answer_extras(details)
         messages.append({"role": "assistant", "content": result.answer, "details": details})
     except Exception as exc:  # noqa: BLE001
         st.error(error_text(exc))

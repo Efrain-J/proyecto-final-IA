@@ -492,6 +492,13 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
   - **What passed:** the regulation, simulation, mixed and trap questions behaved as specified; the network tests passed in 4 out of 4 runs.
   - **The model changed a digit when copying numbers by hand** (2.970.674 instead of 2.974.674). That's why the results block above is written by code.
 
+- **Chat fixes (2026-11-14, found reviewing the Asistente tab offline):**
+  - **`MissingKeyError(LLMError)`** is raised when `GROQ_API_KEY` is missing. It is raised before the model loop, so a missing key is never retried on the fallback model. Every existing `except LLMError` still works.
+  - **`AgentResult.error`** holds the technical message when `stopped == "llm_error"`; "Detalles" shows it as "Error técnico".
+  - **`AgentResult.models`** lists the model id of every chat call in order, including the t_max nudge and the citation repair, with "?" for an unknown model (the evaluation's convention). "Detalles" shows "Modelo", and the app adds a caption when the 20b fallback answered, because it explains less precisely and nothing else showed it.
+  - **Friendlier retrieval-only answer:** `_fallback_answer` returns `(text, citas, retriever)`. The text says in plain Spanish that the model is missing (no key) or unavailable (limit or connection), then lists the passages and points to the Operación and Comparación tabs. The `llm_error` result now fills `citations` and `retriever`. Reason: a grader without `.env` saw a raw error and an empty "Detalles" even though passages had been retrieved.
+  - **Dashboard:** the chat history is drawn in a container above the input, so a new answer no longer appears below it. Four example questions show while the chat is empty.
+
 ## D10. Call XM's API directly instead of `pydataxm`
 
 **Status:** Decided (2026-11-12)
@@ -601,4 +608,5 @@ Until then, nothing reads the CSV.
   - In the October–December 2024 crisis, Q-learning captures only 50–58% of perfect foresight.
   - The tuned price rule's cut-offs don't carry over well across a regime change, so results are compared against the strongest available rule.
   - The Q-tables were trained on the mixed shift operation only. For a plant running mostly single shifts, a tuned price rule does as well (0.95–1.12 of it, D15).
+- Without the NVIDIA key and the Qdrant index, search falls back to BM25, which ranks some passages poorly (a glossary passage can come first). Retrieval quality is not tuned for that path.
 - This is an academic prototype, not financial, legal or regulatory advice.

@@ -156,6 +156,12 @@ Build a Streamlit app with price vs. decisions, cumulative savings, battery para
 - **Stale cache after a code change.** Streamlit caches simulation results keyed on the function's own code, so the running server had to be restarted after `PolicyRun` changed.
 - **Test collection.** A plain `uv run pytest` still fails to collect `tests/test_part1.py` until `energy/eval/part1.py` exists; meanwhile run with `--ignore=tests/test_part1.py`.
 
+**Chat fixes (2026-11-14):** reviewing the Asistente tab offline showed four problems, fixed test-first (interface changes in D16):
+- The first answer appeared below the input and jumped above it on the next rerun. The history now lives in a container created before the input.
+- Without a Groq key the answer began with a raw error and "Detalles" was empty. It now explains in plain Spanish, lists the retrieved passages with citations, and "Detalles" shows the search engine and the technical error.
+- Four example questions show while the chat is empty.
+- "Detalles" shows which model answered, and a caption appears when the 20b fallback did.
+
 **Done (2026-11-14):** built test-first with Sonnet agents, as in step 2.
 - `app.py`: a thin Streamlit entry point with one function per tab and `main()`, following `../llm_lab_ia/main_app.py`. Run it with `uv run streamlit run app.py` (http://localhost:8501).
 - `energy/app/model.py`: pure logic with no Streamlit. It runs the four app policies (Q-learning, price threshold, shift schedule, night/day; no perfect foresight, no battery) and averages them over the 5 test shift calendars, the same way the agent's `simulate_battery` does (D16), so the chat and the charts agree.

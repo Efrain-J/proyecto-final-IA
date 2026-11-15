@@ -33,6 +33,10 @@ class LLMError(Exception):
     """The model could not produce a reply (no key, network, quota, every model failed)."""
 
 
+class MissingKeyError(LLMError):
+    """``GROQ_API_KEY`` is not set. Same for every model, so it is never retried (D16)."""
+
+
 @dataclass(frozen=True)
 class ToolCall:
     """One tool call requested by the model; ``arguments`` is the raw JSON string."""
@@ -110,7 +114,7 @@ def make_groq_chat(
     def get_client() -> Any:
         key = api_key or os.environ.get("GROQ_API_KEY")
         if not key:  # checked even with an injected client: a missing key is never silent
-            raise LLMError("GROQ_API_KEY no está configurada")
+            raise MissingKeyError("GROQ_API_KEY no está configurada")
         if holder["client"] is None:
             from groq import Groq
 
