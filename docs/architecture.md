@@ -41,7 +41,7 @@ flowchart LR
   LOOP --> EV2[eval.agent -> results/]
 ```
 
-**Implemented:** the XM → CSV path and the whole RAG path (web → raw → clean → chunks → Qdrant → retrieve, with the BM25 fallback). `rl.*`, `agent`, `eval` and the app are planned.
+**Implemented:** the XM → CSV path, the whole RAG path (web → raw → clean → chunks → Qdrant → retrieve, with the BM25 fallback), `rl.*`, `agent`, the dashboard (`app.py`, `energy/app/`), and the eval scripts `eval/tune_q.py` and `eval/agent_eval.py`. Still planned: `eval/part1.py`.
 
 ## 3. Package map and dependency rules
 
@@ -68,9 +68,11 @@ energy/
     index.py         Implemented: chunks -> Qdrant (data/qdrant/)
     retrieve.py      Implemented: Hit, QdrantRetriever, BM25Retriever, open_retriever()
   agent/             Implemented (D16): llm.py, tools.py, prompts.py, render.py, loop.py, __main__.py
-  eval/              Planned: part1.py, agent.py, questions.csv
-  app/charts.py      Planned: pure functions -> plotly figures
-app.py               Planned: thin Streamlit entry point
+  eval/              Partly implemented: tune_q.py (D15), agent_eval.py + agent_questions.yaml (step 7).
+                     Planned: part1.py (results for the report)
+  app/               Implemented (step 6): model.py = pure policy runs, KPIs and labels (no streamlit);
+                     charts.py = pure Plotly figures
+app.py               Implemented: thin Streamlit entry point (sidebar, tabs, caching)
 artifacts/policies/  Planned: trained Q-tables (committed)
 results/             Planned: metrics CSVs and plots (committed)
 ```
@@ -290,21 +292,28 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
 - **Manual check:** `uv run python -m energy.agent "pregunta" [--preset 8h] [--start YYYY-MM-DD --end YYYY-MM-DD] [--bm25] [--t-max N]`.
 - **Testability:** the model is injected (`ChatFn`) and so is the Groq client. Offline tests cover the T_max cap, error observations, the citation check and the repair round. Tests marked `network` call Groq for real.
 
-## 9. Dashboard (Planned)
+## 9. Dashboard (Implemented, step 6)
 
-`app.py` stays thin; the charts are pure functions in `energy/app/charts.py`.
+`app.py` stays thin and only wires widgets to the pure logic in `energy/app/model.py` (runs, KPIs, labels) and `energy/app/charts.py` (Plotly figures). Run it with `uv run streamlit run app.py`.
 
 - **Caching:**
-  - `@st.cache_data` for the prices and for `simulate(policy_id, preset_id, start, end)` (hashable arguments only).
-  - `@st.cache_resource` for the policies, the retriever (exactly one `QdrantClient`, since local mode takes a file lock) and the Groq client.
+  - `@st.cache_data` for the prices and for the policy runs and size comparison (hashable arguments only).
+  - `@st.cache_resource` for the retriever and the agent, opened once per process (one `QdrantClient`, since local mode takes a file lock).
+  - Streamlit keys cached simulations on the function's own code, so restart the server after changing `PolicyRun`.
+- **Policies:** the app runs `q_learning`, `price_threshold`, `shift_schedule` and `night_day` (`APP_POLICIES`). Perfect foresight and no battery are left out; the policies are not chosen in the sidebar.
+- **Headline numbers:** the mean over the 5 test shift calendars (D15, A5): Q-learning's savings, the difference against the best simple rule, and cycles. The same mean as the agent's `simulate_battery`, so the chart and the chat agree.
 - **Sidebar:**
-  - preset, date range, and the policies to compare. The preset and dates build one `UserSettings`, which feeds both the charts and `run_agent`, so the chat answers for the scenario on screen.
-  - a **status panel**: whether the Groq key is present, and which retriever is in use (`qdrant-nvidia` or `bm25`)
+  - **Periodo:** "Oct-Dic 2025", "Oct-Dic 2024 (El Niño)", or "Personalizado" with a date range inside one calendar year.
+  - **Batería:** 4, 8 or 12 h.
+  - **Tipo de operación:** Mixto, Principalmente turnos dobles, Principalmente un turno, each with its approximate weekly running hours (`weekly_hours`).
+  - **Estado:** whether `GROQ_API_KEY` is set, and which retriever is in use (`qdrant-nvidia` or `bm25`).
+  - The period and battery build one `UserSettings`, which feeds the charts and `run_agent`. The chat always simulates the Mixto operation (D16), so the operation selector does not reach it.
 - **Tabs:**
-  1. Price vs. actions over SoC.
-  2. Cumulative savings: the policy against the baselines.
-  3. Chat, with an expander per answer showing the tool calls and citations.
-- **Error handling:** every external call is wrapped and shown with `st.error`. No exception from `agent/` or `rag/` reaches the top level.
+  1. **Operación:** the policy shown (default Q-learning), a selector for calendars 1–5 with that calendar's own metrics, and a week slider. The chart shows price with charge and discharge markers, purple bands where the factory runs, and the state of charge.
+  2. **Comparación:** cumulative savings of the four policies, and savings by battery size and policy.
+  3. **Asistente:** chat via `run_agent`. A "Detalles" expander per answer shows the tool calls, citations, unverified citations, retriever and stop reason. Groq is called only when a message is sent.
+  4. **Acerca de:** data, method and limitations in plain language.
+- **Error handling:** every tab body wraps its errors in `st.error`. Without a Groq key the chat shows retrieved passages only. No exception from `agent/` or `rag/` reaches the top level.
 
 ## 10. Configuration and secrets
 
@@ -351,6 +360,7 @@ Training uses a fixed seed that is recorded in the policy's `.json`. Before subm
 - **Implemented:**
   - Data and RAG: `tests/test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_clean.py`, `test_chunk.py`, `test_index.py`, `test_retrieve.py` (fake embedder + in-memory Qdrant).
   - Part 1: `test_prices.py`, `test_features.py`, `test_battery.py`, `test_policies.py`, `test_qlearning.py`, `test_simulate.py`, `test_train.py`. They use the `synthetic_prices` fixture, and check the `step()` invariants, hand-computed savings, determinism, and that 1 and 2 workers give the same results.
+  - Dashboard: `test_app_model.py`, `test_app_charts.py`, `test_app_helpers.py`, `test_app.py` (Streamlit `AppTest`; no keys, and `load_env` is patched so `.env` is never read), and `test_app_consistency.py` (the dashboard's means equal the agent tool's, so the charts and the chat can't disagree).
 - **Planned:**
   - a check that an article's text is present in its chunk
   - agent loop tests with a scripted fake LLM (`T_max`, tool errors, citations)

@@ -127,3 +127,21 @@ def test_chat_roundtrip_and_reset(at: AppTest) -> None:
     at.button(key="nueva").click().run()
     assert not at.exception
     assert len(at.chat_message) == 0
+
+
+def _infos(at: AppTest) -> str:
+    return " | ".join(i.value for i in at.info)
+
+
+def test_default_scenario_has_no_in_sample_warning(at: AppTest) -> None:
+    at.run()
+    assert not at.exception
+    assert "entrenar" not in _infos(at)
+
+
+def test_custom_training_period_shows_in_sample_warning(at: AppTest) -> None:
+    at.run()
+    at.radio(key="escenario").set_value("Personalizado").run()
+    at.date_input(key="rango").set_value((date(2025, 3, 1), date(2025, 3, 31))).run()
+    assert not at.exception
+    assert "entrenar" in _infos(at)

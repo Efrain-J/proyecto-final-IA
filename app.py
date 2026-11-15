@@ -307,7 +307,7 @@ evalúa en octubre-diciembre, que no vio al entrenar, y se compara con reglas si
 frente a no tener batería.
 
 ### Limitaciones
-- Se usa el precio de bolsa. No se tiene encuenta una tarifa.
+- Se usa el precio de bolsa. No se tiene en cuenta una tarifa.
 - Los turnos de la fábrica son **simulados**.
 - El modelo basado en Q-learning se entrenó con operación mixta.
 - No se modela el desgaste de la batería.
@@ -326,8 +326,13 @@ def main() -> None:
     st.title("Carga inteligente de batería para tu planta")
     settings, mix = sidebar()
     st.caption(model.status_line(settings.preset, settings.start, settings.end, mix))
+    if model.in_sample(settings.start, settings.end):
+        st.info(
+            "El periodo incluye meses usados para entrenar el modelo (ene–sep): "
+            "los resultados de Q-learning son optimistas."
+        )
     st.warning(
-        "Observa cuando ahorras si usaras una inteligentmenente batería para los turnos de tu fábrica. "
+        "Observa cuánto ahorrarías si usaras una batería inteligente para los turnos de tu fábrica. "
         "Cinco calendarios de turnos son simulados. El ahorro se mide frente a no tener batería."
     )
     try:

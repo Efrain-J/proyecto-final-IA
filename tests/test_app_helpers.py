@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from energy.app.model import mix_option_label, period_label, status_line, weekly_hours
+from energy.app.model import in_sample, mix_option_label, period_label, status_line, weekly_hours
 
 
 @pytest.mark.parametrize(
@@ -56,3 +56,17 @@ def test_weekly_hours_unknown_mix_raises():
 )
 def test_mix_option_label(mix, expected):
     assert mix_option_label(mix) == expected
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        (date(2025, 10, 1), date(2025, 12, 31), False),
+        (date(2025, 9, 1), date(2025, 9, 30), True),
+        (date(2025, 1, 1), date(2025, 12, 31), True),
+        (date(2025, 9, 30), date(2025, 10, 5), True),
+        (date(2025, 10, 1), date(2025, 10, 7), False),
+    ],
+)
+def test_in_sample(start, end, expected):
+    assert in_sample(start, end) is expected

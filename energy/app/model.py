@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from energy import config
+from energy.data.prices import TRAIN_LAST_MONTH
 from energy.rl.battery import PRESETS
 from energy.rl.factory import N_SHIFT_TYPES, SHIFT_HOURS, TEST_SHIFT_SEEDS, add_shifts, get_mix
 from energy.rl.simulate import resolve_policy, simulate
@@ -277,3 +278,17 @@ def status_line(preset_id: str, start: date, end: date, mix: str) -> str:
     """Caption such as ``Batería de 8 h · oct–dic 2025 · Operación: Mixto``."""
     hours = PRESETS[preset_id].label
     return f"Batería de {hours} · {period_label(start, end)} · Operación: {MIX_LABELS[mix]}"
+
+
+def in_sample(start: date, end: date) -> bool:
+    """Whether the period touches the months the Q-tables were trained on (D5).
+
+    Training uses January-September of each year, so Q-learning results there are
+    optimistic. Mirrors the ``in_sample`` flag of the agent tool. Periods stay inside one
+    calendar year (``UserSettings``), so the start month decides.
+
+    Args:
+        start: First day of the period.
+        end: Last day (unused: kept so the call reads as a period test).
+    """
+    return start.month <= TRAIN_LAST_MONTH

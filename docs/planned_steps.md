@@ -119,7 +119,7 @@ Build the agent loop with Groq tool calling, with an iteration cap, at least two
 
 Build a Streamlit app with price vs. decisions, cumulative savings, battery parameters the user can change, and a chat with the agent.
 
-**Design agreed (2026-11-14), not implemented yet.** The design starts from the customer's questions: the manager of a plant that buys at the bolsa price (D2).
+**Design agreed and implemented (2026-11-14).** The design starts from the customer's questions: the manager of a plant that buys at the bolsa price (D2).
 1. Is a battery worth it, and what size?
 2. Does a smart controller beat a simple timer?
 3. How much do my shifts and the price year matter?
@@ -149,8 +149,27 @@ Build a Streamlit app with price vs. decisions, cumulative savings, battery para
 - **Open point:** the agent's `simulate_battery` always uses the mixed operation (D16), so the chat won't follow the "Tipo de operación" selector unless `UserSettings` gains a mix. Decide when building the chat tab.
 
 **Obstacles:**
+- **Confusing period selection.** The scenario radio stayed selectable while custom dates were on, and the date picker was three clicks deep. Now one radio has a "Personalizado" option that shows the dates directly.
+- **Factory hours were hard to read.** Grey meant "off", so the shading was ambiguous. Factory-running hours are now purple bands, with a legend entry.
+- **Averages next to one calendar.** The indicators were means over the 5 shift calendars, but the plot showed calendar 1 only. Averages are now labeled as such, the Operación tab shows the chosen calendar's own metrics, and a selector picks calendars 1–5. On 8 h, Oct–Dec 2025, Q-learning ranges from −0.4 % (calendar 1) to +10.6 % (calendar 4) against the best rule; the mean is +5.3 %.
+- **Crowded chart title.** The title collided with the legend. The title is pinned to the top, with a 120 px top margin.
+- **Stale cache after a code change.** Streamlit caches simulation results keyed on the function's own code, so the running server had to be restarted after `PolicyRun` changed.
+- **Test collection.** A plain `uv run pytest` still fails to collect `tests/test_part1.py` until `energy/eval/part1.py` exists; meanwhile run with `--ignore=tests/test_part1.py`.
 
-**Done:**
+**Done (2026-11-14):** built test-first with Sonnet agents, as in step 2.
+- `app.py`: a thin Streamlit entry point with one function per tab and `main()`, following `../llm_lab_ia/main_app.py`. Run it with `uv run streamlit run app.py` (http://localhost:8501).
+- `energy/app/model.py`: pure logic with no Streamlit. It runs the four app policies (Q-learning, price threshold, shift schedule, night/day; no perfect foresight, no battery) and averages them over the 5 test shift calendars, the same way the agent's `simulate_battery` does (D16), so the chat and the charts agree.
+- `energy/app/charts.py`: pure Plotly figures for operation, cumulative savings and savings by battery size.
+- Tabs: **Operación**, **Comparación**, **Asistente** (chat, with the sidebar battery and period as `UserSettings`; it always simulates the Mixto operation, this resolves the open point above) and **Acerca de**.
+- Caching: `st.cache_data` for prices and simulations, `st.cache_resource` for the retriever and agent. Each tab wraps its errors in `st.error`. Groq is called only when a chat message is sent.
+- **In-sample warning:** a custom period that overlaps January–September (the training months, D5) shows an `st.info` saying Q-learning's results are optimistic (`model.in_sample`).
+- Tests: `tests/test_app_model.py`, `test_app_charts.py`, `test_app_helpers.py`, `test_app.py` (Streamlit `AppTest`, no keys, `.env` never read) and `test_app_consistency.py`.
+  - **The consistency test** checks that the dashboard's means equal the agent tool's means (8 h, 2025-10-01..14). Q-learning matches exactly. The baselines differ only by the tool's whole-peso rounding.
+  - 679 tests pass in total.
+
+**Still open:**
+- A clean-clone check (fresh clone, no `.env`, no Qdrant index, so the BM25 path) together with the README pass.
+- A live chat check, which needs the user's authorization because it uses Groq tokens.
 
 ## 7. Agent evaluation
 
