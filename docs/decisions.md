@@ -351,7 +351,7 @@ That matches the prototype, with a spread of about ±0.03 between seeds.
 
 Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8 h only, and they also helped 12 h.
 
-**Scenario 2024 and cross-year transfer (2026-11-13).** `uv run python -m energy.rl.train --scenarios 2024` trains on January–September 2024, writing `q_*_2024` and `threshold_*_2024`. The tables were then crossed: each year's tables tested on October–December of both years, over the 5 test shift patterns, training seed 0. The script is in the scratchpad and not yet in the repo.
+**Scenario 2024 and cross-year transfer (2026-11-13).** `uv run python -m energy.rl.train --scenarios 2024` trains on January–September 2024, writing `q_*_2024` and `threshold_*_2024`. The tables were then crossed: each year's tables tested on October–December of both years, over the 5 test shift patterns, training seed 0. First run from a scratchpad script; now reproduced by `energy/eval/part1.py` (see below).
 
 **Compare against the strongest rule.** The price rule's cut-offs don't carry over well across a regime change. Cut-offs tuned on January–September 2024 did worse on October–December 2024 than cut-offs tuned on 2025 (8 h: 8.06 M against 9.67 M). Against the weaker 2024 rule, Q-learning on 8 h looked +33% better, which would mislead. So the cross-year metric is **Q-learning ÷ the strongest rule available**: the shift schedule, the fixed schedule, or either tuned price rule.
 
@@ -381,7 +381,7 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 
 **Small side effect:** the tuned price rule's cut-offs depend on the training shift patterns. For 4 h, seed 0 now picks worse cut-offs (2.09 M against 2.50 M). The 4 h comparison isn't affected, because the shift schedule is the best rule there.
 
-**Shift-mix robustness check (2026-11-14).** The tables were trained on the `default` mix only. Before offering the mix as a dashboard choice, every year's tables were tested on October–December of the same year under all three mixes, over the 5 test shift patterns. That's 540 simulations, 4.6 s, from a scratchpad script. The `default` rows reproduce the numbers above. The strongest rule includes the price rule with the other year's cut-offs, as above.
+**Shift-mix robustness check (2026-11-14).** The tables were trained on the `default` mix only. Before offering the mix as a dashboard choice, every year's tables were tested on October–December of the same year under all three mixes, over the 5 test shift patterns. That's 540 simulations, 4.6 s, first from a scratchpad script. The `default` rows reproduce the numbers above. The strongest rule includes the price rule with the other year's cut-offs, as above.
 
 *Q-learning ÷ strongest rule (range over the 5 patterns where it matters):*
 
@@ -398,6 +398,12 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 - **Mostly double shifts:** Q-learning holds up or does better (+6 to +16% for 8 h and 12 h). More operating hours mean more hours to discharge, which is the situation it learned.
 - **Mostly single shifts:** the edge disappears. For 8 h 2025 and 12 h 2024 Q-learning is slightly below the best price rule (0.97 and 0.95). The training mix has 45% full-shift days, so this mix is outside what the model saw.
 - **4 h:** the shift schedule wins under every mix, as before.
+
+**Reproducible results (2026-11-14): `energy/eval/part1.py`.** `uv run python -m energy.eval.part1 --mixes default mostly_double mostly_single` evaluates the committed tables without retraining. It runs 3 batteries × 2 test years × 3 mixes × 5 test shift calendars × 7 contenders: the three rules, the price rule with each year's cut-offs, Q-learning trained on each year, and perfect foresight. It takes about 6 s and writes `results/part1/` (`runs.csv`, `summary.csv`, `summary.md`).
+- **It reproduces the tables above exactly,** for the cross-year and shift-mix checks. Two cross-year 4 h cells differ by 0.01 from rounding.
+- **Same-year Q ÷ best rule is 0.99 / 1.05 / 1.15** for 4 / 8 / 12 h on 2025. That is training seed 0, the committed tables. The 1.00 / 1.07 / 1.11 above is the mean over training seeds 0–2.
+- **8 h, 2025, Mixto:** 3.13 M COP, the same as the dashboard and the agent tool, since all three call `simulate()`.
+- **The report cites `results/part1/summary.md`.**
 - **The type of operation matters more than the controller.** For the same battery, savings are about 35–40% higher with mostly double shifts and about 30% lower with mostly single shifts. The battery can only discharge while the factory runs, about 71 / 57 / 43 h a week (A5).
 
 *Savings, October–December, mean of the 5 test patterns (M COP), Q-learning / strongest rule:*

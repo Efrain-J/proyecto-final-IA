@@ -41,7 +41,7 @@ flowchart LR
   LOOP --> EV2[eval.agent -> results/]
 ```
 
-**Implemented:** the XM → CSV path, the whole RAG path (web → raw → clean → chunks → Qdrant → retrieve, with the BM25 fallback), `rl.*`, `agent`, the dashboard (`app.py`, `energy/app/`), and the eval scripts `eval/tune_q.py` and `eval/agent_eval.py`. Still planned: `eval/part1.py`.
+**Implemented:** the XM → CSV path, the whole RAG path (web → raw → clean → chunks → Qdrant → retrieve, with the BM25 fallback), `rl.*`, `agent`, the dashboard (`app.py`, `energy/app/`), and the eval scripts `eval/tune_q.py`, `eval/agent_eval.py` and `eval/part1.py`.
 
 ## 3. Package map and dependency rules
 
@@ -68,8 +68,8 @@ energy/
     index.py         Implemented: chunks -> Qdrant (data/qdrant/)
     retrieve.py      Implemented: Hit, QdrantRetriever, BM25Retriever, open_retriever()
   agent/             Implemented (D16): llm.py, tools.py, prompts.py, render.py, loop.py, __main__.py
-  eval/              Partly implemented: tune_q.py (D15), agent_eval.py + agent_questions.yaml (step 7).
-                     Planned: part1.py (results for the report)
+  eval/              Implemented: tune_q.py (D15), agent_eval.py + agent_questions.yaml (step 7),
+                     part1.py (Part 1 results tables for the report)
   app/               Implemented (step 6): model.py = pure policy runs, KPIs and labels (no streamlit);
                      charts.py = pure Plotly figures
 app.py               Implemented: thin Streamlit entry point (sidebar, tabs, caching)
@@ -350,7 +350,7 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
 | `data/corpus/chunks.jsonl` | Yes (planned) | `rag.chunk` |
 | `data/qdrant/` | **No** (D8) | `rag.index`; needs `NVIDIA_API_KEY` |
 | `artifacts/policies/` | Yes | `uv run python -m energy.rl.train --scenarios 2025` (seeded, about 4 s) |
-| `results/` | Yes (planned) | `eval.part1`, `eval.agent` |
+| `results/` | Yes | `eval.part1`, `eval.agent_eval`, `eval.tune_q` |
 
 Training uses a fixed seed that is recorded in the policy's `.json`. Before submission, test with a clean clone (`git clone` → `uv sync` → run) and **no** `.env`.
 

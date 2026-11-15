@@ -72,11 +72,16 @@ Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/po
 - `--scenarios 2024` trained the 2024 tables, and each year's tables were tested on October–December of both years.
 - **Transfer works,** thanks to the relative price state: for 8 h and 12 h, Q-learning ÷ the strongest rule is 1.00–1.15 in every combination. For 4 h the shift schedule always wins.
 - **Obstacle:** the price rule tuned on January–September 2024 was weak on October–December 2024, which made Q-learning look 33% better than it is. We now compare against the strongest available rule (D15).
-- **Still to do:** move the cross-year script from the scratchpad into `energy/eval/`, with a CSV in `results/`.
+- **Done (2026-11-14):** the cross-year check now lives in `energy/eval/part1.py`, with CSVs in `results/part1/`.
 
 **Shift-mix check (2026-11-14), D15:** the tables, trained on the mixed operation only, were tested under all three shift mixes. With mostly double shifts Q-learning holds up or does better. With mostly single shifts its edge over the best price rule disappears (0.95–1.12). Recorded as a limitation; no retraining per mix.
 
-**`energy/eval/part1.py` (started 2026-11-14):** the tests are written (`tests/test_part1.py`), the module isn't. It will evaluate the committed tables without retraining, including the cross-year check, and write `results/part1/` (`runs.csv`, `summary.csv`, `summary.md`) for the report. Until the module exists, `uv run pytest` fails to collect that file.
+**`energy/eval/part1.py` (done 2026-11-14):**
+- **What it does:** evaluates the committed tables without retraining, for the same-year, cross-year and shift-mix results, and writes `results/part1/` (`runs.csv`, `summary.csv`, `summary.md`) for the report.
+- **Command:** `uv run python -m energy.eval.part1 --mixes default mostly_double mostly_single`, about 6 s.
+- **Built test-first:** the tests were restored from a stash; a Sonnet agent wrote the module, and tests were added for the mix column and for ordering batteries by size.
+- **Same-year Q ÷ best rule on 2025:** 0.99 / 1.05 / 1.15 for 4 / 8 / 12 h. All figures match D15.
+- **Tests:** a plain `uv run pytest` passes again, 720 tests.
 
 ## 3. Simulation tool
 
@@ -154,7 +159,7 @@ Build a Streamlit app with price vs. decisions, cumulative savings, battery para
 - **Averages next to one calendar.** The indicators were means over the 5 shift calendars, but the plot showed calendar 1 only. Averages are now labeled as such, the Operación tab shows the chosen calendar's own metrics, and a selector picks calendars 1–5. On 8 h, Oct–Dec 2025, Q-learning ranges from −0.4 % (calendar 1) to +10.6 % (calendar 4) against the best rule; the mean is +5.3 %.
 - **Crowded chart title.** The title collided with the legend. The title is pinned to the top, with a 120 px top margin.
 - **Stale cache after a code change.** Streamlit caches simulation results keyed on the function's own code, so the running server had to be restarted after `PolicyRun` changed.
-- **Test collection.** A plain `uv run pytest` still fails to collect `tests/test_part1.py` until `energy/eval/part1.py` exists; meanwhile run with `--ignore=tests/test_part1.py`.
+- **Test collection.** A plain `uv run pytest` failed to collect `tests/test_part1.py` until `energy/eval/part1.py` existed. It's fixed in step 2.
 
 **Chat fixes (2026-11-14):** reviewing the Asistente tab offline showed four problems, fixed test-first (interface changes in D16):
 - The first answer appeared below the input and jumped above it on the next rerun. The history now lives in a container created before the input.
