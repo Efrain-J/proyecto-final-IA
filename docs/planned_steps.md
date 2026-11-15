@@ -8,7 +8,7 @@ The order follows the MVP principle: get a thin version working end to end first
 
 ## 1. Data
 
-Get one year of hourly bolsa prices (and demand) from XM through `pydataxm`, and save it as a local CSV snapshot that the rest of the project reads. Add a script that downloads it with a single command.
+Get two years (2024–2025) of hourly bolsa prices from XM's API, called directly (D5, D10), and save it as a local CSV snapshot that the rest of the project reads. Add a script that downloads it with a single command.
 
 **Obstacles:**
 - `pydataxm` breaks with pandas 3.1 (`freq='M'`). We call XM's API directly instead (D10).
@@ -28,7 +28,7 @@ Define the battery problem as an MDP (state, actions, transitions, reward), solv
 - One Q-table per preset (2 h, 3 h and 4 h, D9).
 - Split: within each year, train January–September and test October–December; scenario 2025 first, then 2024 (D5).
 
-**To do first:** O9, the price loader (`energy/data/prices.py`), with the trailing 168-hour mean and the within-year split. Then follow the Part 1 design in `architecture.md`: one shared `step()` for the battery physics, the `Policy` protocol, and the baselines including perfect foresight.
+**Done first:** O9, the price loader (`energy/data/prices.py`), with the trailing 168-hour mean and the within-year split. Then follow the Part 1 design in `architecture.md`: one shared `step()` for the battery physics, the `Policy` protocol, and the baselines including perfect foresight.
 
 **Obstacles:**
 - **Miscalibrated test.** The test agent's threshold (Q-learning ≥ 80% of perfect foresight on synthetic data) couldn't be met: even the fixed schedule reaches only 75–84% there. It was replaced with Q-learning ≥ 90% of the fixed schedule.
@@ -43,9 +43,9 @@ Define the battery problem as an MDP (state, actions, transitions, reward), solv
 - `energy/rl/qlearning.py`: training, plus `TabularPolicy` with save and load.
 - `energy/rl/train.py`: parallel training.
 
-Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/policies/q_{2h,3h,4h}_2025.*`. The results are in D14. 276 tests pass. Still to do: the 2024 scenario (`--scenarios 2024`) and `eval/part1.py` (metrics and plots in `results/`).
+Running `uv run python -m energy.rl.train --scenarios 2025` writes `artifacts/policies/q_{2h,3h,4h}_2025.*`. The results are in D14. 276 tests pass. Still to do: the 2024 scenario (`--scenarios 2024`) and `eval/part1.py` (metrics and plots in `results/`) (both done, see below).
 
-**Branch `explore/factory-schedule` (2026-11-13), D15 + A5:**
+**Factory shifts and long batteries (2026-11-13, merged into `main`), D15 + A5:**
 - **Why:** Q-learning didn't beat a hand rule when the factory always runs.
 - **Exploration:** we tried a factory with random shifts (discharge only while it runs) and longer batteries, through three rounds of prototypes in the scratchpad.
 - **Implemented test-first:**
@@ -151,7 +151,7 @@ Build a Streamlit app with price vs. decisions, cumulative savings, battery para
      - the limitations, in plain language: bolsa price not the regulated tariff, synthetic shifts, model trained on the mixed operation, no battery wear, savings measured against no battery
      - "compare with your supplier's quote", since there is no cost data
 - **Build:** `energy/app/charts.py` holds pure Plotly functions and the indicator calculations, tested offline. `app.py` is thin, with `st.cache_data` for prices and simulations and `st.cache_resource` for the retriever and agent. There's also an `AppTest` smoke test with no Groq key.
-- **Open point:** the agent's `simulate_battery` always uses the mixed operation (D16), so the chat won't follow the "Tipo de operación" selector unless `UserSettings` gains a mix. Decide when building the chat tab.
+- **Open point:** the agent's `simulate_battery` always uses the mixed operation (D16), so the chat won't follow the "Tipo de operación" selector unless `UserSettings` gains a mix. Decide when building the chat tab. (resolved: the chat always simulates the Mixto operation)
 
 **Obstacles:**
 - **Confusing period selection.** The scenario radio stayed selectable while custom dates were on, and the date picker was three clicks deep. Now one radio has a "Personalizado" option that shows the dates directly.
@@ -179,7 +179,7 @@ Build a Streamlit app with price vs. decisions, cumulative savings, battery para
   - 679 tests pass in total.
 
 **Still open:**
-- A clean-clone check (fresh clone, no `.env`, no Qdrant index, so the BM25 path) together with the README pass.
+- A clean-clone check (fresh clone: with no `.env` it uses BM25 and a retrieval-only chat; with only `NVIDIA_API_KEY` it uses the committed Qdrant index, since D17) together with the README pass.
 - A live chat check, which needs the user's authorization because it uses Groq tokens.
 
 ## 7. Agent evaluation
@@ -190,7 +190,7 @@ Write 10–15 fixed test questions, including trap questions, and record whether
 - **The planned price-history trap wasn't a trap:** the corpus has XM Paper N°52 on the high-price periods (El Niño 2024), so it became regulation question 4. The replacement trap asks for a battery's cost, which the corpus doesn't cover.
 - **A decline in the model's own words** isn't the exact refusal phrase; such answers are left for manual review instead of being scored automatically.
 
-**Written (2026-11-13), live run pending:** 11 questions in `energy/eval/agent_questions.yaml` (4 regulation, 3 simulation, 1 mixed, 3 traps: off-topic, out of corpus, prompt injection), each with its expected and forbidden tools, simulation arguments, sources and answer patterns. `energy/eval/agent_eval.py` runs them in fresh chats with the default settings and writes `results/agent_eval/`. Offline tests in `tests/test_agent_eval.py`.
+**Written (2026-11-13), live run pending (done, see below):** 11 questions in `energy/eval/agent_questions.yaml` (4 regulation, 3 simulation, 1 mixed, 3 traps: off-topic, out of corpus, prompt injection), each with its expected and forbidden tools, simulation arguments, sources and answer patterns. `energy/eval/agent_eval.py` runs them in fresh chats with the default settings and writes `results/agent_eval/`. Offline tests in `tests/test_agent_eval.py`.
 
 **Done (2026-11-14):**
 - **Live run:** `uv run python -m energy.eval.agent_eval --pause 30`. All answers came from `openai/gpt-oss-120b` with Qdrant + NVIDIA retrieval. The results are in `results/agent_eval/`.
@@ -211,5 +211,14 @@ Write 10–15 fixed test questions, including trap questions, and record whether
 Write the README with reproducible run instructions, `requirements.txt`, the AI-use declaration, and the report (up to 4 pages), including the limitations.
 
 **Obstacles:**
+- A fresh clone with `NVIDIA_API_KEY` still used BM25, because the index was gitignored; fixed by committing it (D17).
 
 **Done:**
+- README in Spanish (`README.md`): what it is, two ways to run it, layout, data sources.
+- `requirements.txt` exported from `uv.lock`.
+- Hosted demo on Streamlit Community Cloud, with the keys as secrets and the Qdrant index committed (D17, 2026-11-14).
+
+**Still to do:**
+- AI-use declaration.
+- Report (≤ 4 pages).
+- Final clean-clone check.

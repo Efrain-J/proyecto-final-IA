@@ -13,7 +13,7 @@ The reasons behind each choice live in [`decisions.md`](decisions.md), and the b
 
 A non-regulated commercial or industrial user in Colombia pays the hourly bolsa price and runs a battery (D2). The system:
 
-1. **Learns when to charge, idle or discharge** with Q-learning, falling back to value iteration if needed. Part 1, D3 and O2.
+1. **Learns when to charge, idle or discharge** with tabular Q-learning. Part 1, D3 and O2. (Value iteration was not needed and is not built.)
 2. **Replays any policy over real prices** with `simulate()` and measures the savings against having no battery.
 3. **Answers regulation questions** with a RAG agent over CREG and XM documents, citing article and document. The agent also uses `simulate()` as a tool.
 4. **Shows it all** in a Streamlit dashboard with a chat.
@@ -25,7 +25,7 @@ Out of scope: solar (D4), demand shifting (D3), battery wear (A3), free-form bat
 ```mermaid
 flowchart LR
   XM[XM API] -->|data.xm_prices| CSV[(prices_hourly.csv)]
-  CSV --> FEAT[rl.features] --> TRAIN[rl.train: Q-learning / VI] --> POL[(artifacts/policies)]
+  CSV --> FEAT[rl.features] --> TRAIN[rl.train: Q-learning] --> POL[(artifacts/policies)]
   CSV --> SIM[rl.simulate]
   POL --> SIM
   SIM --> EV1[eval.part1 -> results/]
@@ -38,7 +38,7 @@ flowchart LR
   TOOLS <--> LOOP[agent.loop + Groq]
   LOOP --> APP[app.py]
   SIM --> APP
-  LOOP --> EV2[eval.agent -> results/]
+  LOOP --> EV2[eval.agent_eval -> results/]
 ```
 
 **Implemented:** the XM → CSV path, the whole RAG path (web → raw → clean → chunks → Qdrant → retrieve, with the BM25 fallback), `rl.*`, `agent`, the dashboard (`app.py`, `energy/app/`), and the eval scripts `eval/tune_q.py`, `eval/agent_eval.py` and `eval/part1.py`.
@@ -53,13 +53,13 @@ energy/
     xm_prices.py     XM API -> data/raw/xm/*.json -> data/processed/prices_hourly.csv
     corpus.py        manifest (sources.csv) + document download
     prices.py        Implemented: load_prices(), scenario_split()
-  rl/                Implemented: Part 1, pure numpy/pandas (value_iteration.py not built)
+  rl/                Implemented: Part 1, pure numpy/pandas
     battery.py       BatteryPreset, PRESETS, Action, step(..., factory_on)  <- the only battery dynamics
-    factory.py       D15/A5 (branch): shift types, ShiftMix/MIXES, add_shifts()
+    factory.py       D15/A5 (factory shifts, long batteries): shift types, ShiftMix/MIXES, add_shifts()
     features.py      relative price level, Discretizer (bin edges fitted on train)
     policies.py      Policy protocol, factory_columns(), NoBattery, NightDay, ShiftSchedule,
                      PriceThreshold (tuned), PerfectForesight
-    qlearning.py, value_iteration.py   train -> TabularPolicy (save/load)
+    qlearning.py     train_q_learning() -> TabularPolicy (save/load)
     simulate.py      simulate() + SimulationResult
     train.py         python -m energy.rl.train -> artifacts/policies/
   rag/
@@ -73,8 +73,8 @@ energy/
   app/               Implemented (step 6): model.py = pure policy runs, KPIs and labels (no streamlit);
                      charts.py = pure Plotly figures
 app.py               Implemented: thin Streamlit entry point (sidebar, tabs, caching)
-artifacts/policies/  Planned: trained Q-tables (committed)
-results/             Planned: metrics CSVs and plots (committed)
+artifacts/policies/  Implemented: trained Q-tables and tuned price thresholds (committed)
+results/             Implemented: committed metrics CSVs and Markdown summaries (no plots)
 ```
 
 **Dependency direction:** `config ← data ← {rl, rag} ← agent ← {eval, app}`
@@ -97,29 +97,27 @@ results/             Planned: metrics CSVs and plots (committed)
 | `data/corpus/raw/<id>.<format>` | The downloaded document as-is. |
 | `data/corpus/clean/<id>.md` | Clean Markdown: main content only, no links, CREG articles marked `## ARTÍCULO n.` (ascending only, D11) and annexes marked `## ANEXO n.` (D13). |
 | `data/corpus/chunks.jsonl` | One chunk per line: `doc_id, title, publisher, article ("12", "Anexo 1" or null), in_force, superseded_by, chunk_index, text`. Committed and deterministic. It feeds the BM25 fallback and is the input to the index (D13). |
-
-**Planned**
-
-| File | Contents |
-|---|---|
-| `artifacts/policies/q_{2,3,4}h_{2025,2024}.npz` + `.json` (2025 implemented) | One Q-table per preset and scenario (D9, D5), plus metadata: seed, episodes, training range, price-level bin edges, battery duration. Committed (KB-sized). |
-| `results/*.csv`, `results/*.png` | Part 1 metrics and the agent evaluation. Committed as evidence for the report. |
+| `artifacts/policies/q_{4h,8h,12h}_{2024,2025}.npz` + `.json` | One Q-table per preset and scenario (D9, D5, D15), plus metadata: seed, episodes, training range, price-level bin edges, battery duration. Committed (KB-sized). |
+| `artifacts/policies/threshold_{4h,8h,12h}_{2024,2025}.json` | Cut-offs of the `PriceThreshold` baseline, fitted on the training months (D15). |
+| `results/part1/` | `runs.csv`, `summary.csv`, `summary.md`: Part 1 metrics (`eval.part1`). |
+| `results/agent_eval/` | `agent_eval.csv`, `transcripts.jsonl`, `summary.md`: agent evaluation (`eval.agent_eval`). |
+| `results/tuning/` | Q-learning tuning on the validation months, CSV and Markdown (`eval.tune_q`, D15). |
 
 ## 5. Part 1 design (Implemented)
 
-> **Branch `explore/factory-schedule` (D15).** The code below shows the D14 baseline, with these differences:
->
-> - **Presets:** 4 h, 8 h and 12 h.
-> - **Battery physics:** `step()` and `valid_mask()` take `factory_on`, and a discharge while the factory is off becomes idle.
-> - **Frames:** they may carry `shift_type` and `factory_on`. A frame without them means the factory always runs (`factory_columns()`).
-> - **Q-table:** shape `(12, levels, 4, 4 shift types, 3)`. `train_q_learning` accepts a list of frames, one per shift pattern, with episodes kept within each.
-> - **New baselines:** `ShiftSchedule` and `PriceThreshold`. `PriceThreshold.tune` chooses its cut-offs on the training data, and they're saved as `threshold_<preset>_<year>.json`.
-> - **`simulate(..., mix, shift_seed)`:**
->   - It adds shifts over the whole price frame when they're missing.
->   - The summary gains `shift_mix` and `shift_seed`.
->   - The policy ids are `no_battery, night_day, shift_schedule, price_threshold, perfect_foresight, q_learning`.
->   - A missing table falls back to `ShiftSchedule`.
-> - **`train.py`:** trains on 5 shift patterns and reports the mean over the 5 `TEST_SHIFT_SEEDS`.
+D14 introduced the Part 1 design below. D15 (factory shifts, long batteries) extended it:
+
+- **Presets:** 4 h, 8 h and 12 h.
+- **Battery physics:** `step()` and `valid_mask()` take `factory_on`, and a discharge while the factory is off becomes idle.
+- **Frames:** they may carry `shift_type` and `factory_on`. A frame without them means the factory always runs (`factory_columns()`).
+- **Q-table:** shape `(12, levels, 4, 4 shift types, 3)`. `train_q_learning` accepts a list of frames, one per shift pattern, with episodes kept within each.
+- **New baselines:** `ShiftSchedule` and `PriceThreshold`. `PriceThreshold.tune` chooses its cut-offs on the training data, and they're saved as `threshold_<preset>_<year>.json`.
+- **`simulate(..., mix, shift_seed)`:**
+  - It adds shifts over the whole price frame when they're missing.
+  - The summary gains `shift_mix` and `shift_seed`.
+  - The policy ids are `no_battery, night_day, shift_schedule, price_threshold, perfect_foresight, q_learning`.
+  - A missing table falls back to `ShiftSchedule`.
+- **`train.py`:** trains on `DEFAULT_SHIFT_DRAWS` (10) shift patterns and reports the mean over the 5 `TEST_SHIFT_SEEDS`.
 
 ```python
 # rl/battery.py
@@ -130,7 +128,7 @@ class Action(IntEnum):   # values index the Q-table directly
 
 @dataclass(frozen=True)
 class BatteryPreset:
-    id: str              # "2h" | "3h" | "4h"
+    id: str              # "4h" | "8h" | "12h"
     label: str
     capacity_kwh: float
     power_kw: float
@@ -139,19 +137,20 @@ class BatteryPreset:
 
 PRESETS: dict[str, BatteryPreset]
 
-def step(level: int, action: Action, preset: BatteryPreset) -> tuple[int, float]:
+def step(level: int, action: Action | int, preset: BatteryPreset,
+         factory_on: bool = True) -> tuple[int, float]:
     """Return (next_level, grid_kwh): +P/η when charging, −P·η when discharging.
     An impossible action is treated as idle."""
 
 def transition_tables(preset) -> tuple[np.ndarray, np.ndarray]: ...  # built from step()
-def valid_mask(preset) -> np.ndarray: ...
+def valid_mask(preset: BatteryPreset, factory_on: bool = True) -> np.ndarray: ...
 ```
 
-- **`step()` is the only implementation of the battery physics.** Q-learning, value iteration, the baselines and `simulate` all call it, so training and evaluation can't silently diverge. It must be tested (efficiency, SoC bounds).
+- **`step()` is the only implementation of the battery physics.** Q-learning, the baselines and `simulate` all call it, so training and evaluation can't silently diverge. It must be tested (efficiency, SoC bounds).
 - **State (D14):** an hour pair (12 values), the SoC level (0 to the battery's duration in hours; one full-power hour moves it one level), and a **relative** price level. The price level is the price ÷ the trailing 168-hour mean, in 4 bins. The `Discretizer` fits the quartile bin edges on training data only and is saved with the policy.
 - **Reward (D14, option A):** relative price × (kWh delivered − kWh bought), with √0.9 efficiency each way. No wear (A3), and every discharged kWh replaces a purchase (A2). `simulate` always reports COP.
 - **Episodes:** one week, starting empty, γ ≈ 0.99. Impossible actions are masked.
-- **Presets (D9):** 2 h, 3 h and 4 h at 100 kW, one Q-table per preset and scenario. Scenarios are 2025 and 2024, each training on January–September and testing on October–December (D5).
+- **Presets (D9, values from D15):** 4 h, 8 h and 12 h at 100 kW, one Q-table per preset and scenario. Scenarios are 2025 and 2024, each training on January–September and testing on October–December (D5).
 
 ```python
 # rl/policies.py
@@ -171,10 +170,12 @@ class Policy(Protocol):
 - Jobs run in parallel processes, with order-independent seeds (`energy.rl.train`).
 
 Policies:
-- **`TabularPolicy`**, from Q-learning or value iteration.
+- **`TabularPolicy`**, from Q-learning (`train_q_learning`).
 - **Baselines:**
   - `NoBattery`
   - `NightDay`, a fixed schedule: charge from 02:00 and discharge from 18:00, for as many hours as the battery's duration
+  - `ShiftSchedule` (D15), the same idea adapted to the factory's shifts: it discharges only on days the factory runs, and falls back to `NightDay` without shift columns
+  - `PriceThreshold` (D15), charge below and discharge above relative-price cut-offs (discharge only while the factory runs), fitted on the training months
   - `PerfectForesight`, a DP optimum over the actual prices. It isn't causal, but it gives the upper bound for the metric "% of optimum captured" (O3).
 
 ## 6. `simulate()` contract (Implemented)
@@ -192,22 +193,27 @@ class SimulationSummary:
     delivered_kwh: float
     cycles: float          # delivered / (capacity × η)
     invalid_actions: int   # turned into idle
+    shift_mix: str | None = None   # None when the prices already had shift columns
+    shift_seed: int | None = None
 
-@dataclass(frozen=True)
+@dataclass
 class SimulationResult:
     summary: SimulationSummary
     hourly: pd.DataFrame  # timestamp, price, action, soc, grid_kwh, savings_cop, cum_savings_cop
 
-def simulate(policy: str | Policy, start: date, end: date,
-             preset: str | BatteryPreset,
+def simulate(policy: Policy | str, start: date, end: date,
+             preset: BatteryPreset | str,
              prices: pd.DataFrame | None = None,
-             policies_dir: Path = DEFAULT_POLICIES_DIR) -> SimulationResult: ...
+             policies_dir: Path | str = DEFAULT_POLICIES_DIR,
+             mix: str | ShiftMix = "default",
+             shift_seed: int = TEST_SHIFT_SEEDS[0]) -> SimulationResult: ...
 ```
 
 - **Savings** are measured against the same hours with no battery.
 - `savings_pct_of_energy_cost` was dropped: under A2 we don't know the plant's total load.
-- The string id `q_learning` loads `q_<preset>_<start.year>`. If that file is missing, it logs a warning and uses `NightDay`.
-- `policy` and `preset` accept string ids, so Streamlit caching and the agent's tools can pass plain values.
+- The string id `q_learning` loads `q_<preset>_<start.year>`. If that file is missing, it logs a warning and uses `ShiftSchedule` (D15), not `NightDay`. A missing threshold file falls back the same way for `price_threshold`.
+- **Shifts (A5, D15):** if `prices` has no shift columns, `simulate` adds them with `add_shifts(prices, mix, shift_seed)`, and the summary records `shift_mix` and `shift_seed`. The default seed is the first test pattern, `TEST_SHIFT_SEEDS[0]`.
+- `policy` and `preset` accept string ids (`POLICY_IDS`), so Streamlit caching and the agent's tools can pass plain values.
 - Raises `ValueError` if the dates are outside the data or `start > end`. The tool layer turns that into an observation for the model.
 - **One function serves three users:** the Part 1 metric, the dashboard charts, and the agent tool. All three therefore report the same numbers.
 
@@ -267,17 +273,18 @@ def run_tool(registry, name, raw_args) -> tuple[str, dict]   # never raises: {"e
 ToolCallRecord(name, arguments, ok, error, from_settings)   # arguments as used, after filling
 AgentResult(answer, tool_calls, citations, unverified_citations,
             stopped: Literal["answer", "t_max", "llm_error"], retriever,
-            simulations, results_block, model_text)   # answer = results_block + model_text
+            simulations, results_block, model_text, error, models)   # answer = results_block + model_text; models = model id per chat call, in order
+
+def run_agent(question, history, registry, chat, t_max=config.T_MAX,
+              settings: UserSettings | None = None) -> AgentResult   # never raises
+def open_agent(retriever=None) -> tuple[dict[str, Tool], ChatFn]   # the app and the eval call this
 
 # render.py (pure)
 def cop(x) -> str; def pct(x) -> str; POLICY_NAMES
 def render_results(results: list[dict]) -> str   # "" | render_simulation | render_comparison
-def run_agent(question, history, registry, chat, t_max=config.T_MAX,
-              settings: UserSettings | None = None) -> AgentResult   # never raises
 
 # settings.py
 UserSettings(preset="8h", start=2025-10-01, end=2025-12-31)   # frozen, validated; the sidebar builds it
-def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the eval call this
 ```
 
 - **Tools:**
@@ -336,9 +343,9 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
 | XM API | Not used at runtime | Committed CSV snapshot | Implemented |
 | CREG / XM websites | Not used at runtime | Committed raw and clean documents | Implemented |
 | NVIDIA embeddings | Query-time embedding | `BM25Retriever` over the committed `chunks.jsonl` (no torch, no second index), chosen by `open_retriever()` | Implemented |
-| Qdrant | Opened once (the app will cache `open_retriever()`) | BM25 if opening fails (lock, missing index, version) | Implemented |
+| Qdrant | Opened once: the app caches the retriever and agent with `@st.cache_resource` (`load_agent()`) | BM25 if opening fails (lock, missing index, version) | Implemented |
 | Groq | Ordered model list; one retry for a malformed tool call or a short rate limit | Retrieval-only answer: the error plus the top passages with citations | Implemented |
-| Q-table missing | Load from `artifacts/policies/` | `NightDay` baseline (on the D15 branch: `ShiftSchedule`, also when the threshold file is missing), with a logged warning (the app should also show it) | Implemented |
+| Q-table missing | Load from `artifacts/policies/` | `ShiftSchedule` baseline (D15), also when the threshold file is missing, with a logged warning (the app should also show it) | Implemented |
 
 ## 12. Artifacts and reproducibility
 
@@ -347,9 +354,9 @@ def open_agent(retriever=None) -> tuple[registry, ChatFn]   # the app and the ev
 | `data/raw/xm/`, `data/processed/prices_hourly.csv` | Yes | `uv run python -m energy.data.xm_prices` |
 | `data/corpus/raw/`, `data/corpus/sources.csv` | Yes | `uv run python -m energy.data.corpus` |
 | `data/corpus/clean/` | Yes | `uv run python -m energy.rag.clean` |
-| `data/corpus/chunks.jsonl` | Yes (planned) | `rag.chunk` |
+| `data/corpus/chunks.jsonl` | Yes | `rag.chunk` |
 | `data/qdrant/` | Yes, except `.lock` (D17) | `rag.index`; needs `NVIDIA_API_KEY` |
-| `artifacts/policies/` | Yes | `uv run python -m energy.rl.train --scenarios 2025` (seeded, about 4 s) |
+| `artifacts/policies/` | Yes | `uv run python -m energy.rl.train --scenarios 2025` (seeded, about 31 s for one year) |
 | `results/` | Yes | `eval.part1`, `eval.agent_eval`, `eval.tune_q` |
 
 Training uses a fixed seed that is recorded in the policy's `.json`. Before submission, test with a clean clone (`git clone` → `uv sync` → run) and **no** `.env`.
@@ -357,13 +364,12 @@ Training uses a fixed seed that is recorded in the policy's `.json`. Before subm
 ## 13. Testing
 
 - `uv run pytest` runs offline. HTTP is mocked with `httpx.MockTransport`. Tests that call real services are marked `network` and are skipped by default (`uv run pytest -m network` to run them).
-- **Implemented:**
-  - Data and RAG: `tests/test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_clean.py`, `test_chunk.py`, `test_index.py`, `test_retrieve.py` (fake embedder + in-memory Qdrant).
-  - Part 1: `test_prices.py`, `test_features.py`, `test_battery.py`, `test_policies.py`, `test_qlearning.py`, `test_simulate.py`, `test_train.py`. They use the `synthetic_prices` fixture, and check the `step()` invariants, hand-computed savings, determinism, and that 1 and 2 workers give the same results.
+- **Implemented.** All of these are in `tests/` (`ls tests`):
+  - Data and config: `test_io.py`, `test_xm_prices.py`, `test_corpus.py`, `test_config.py`, `test_prices.py`.
+  - RAG: `test_clean.py`, `test_chunk.py` (the article's heading and text stay in its chunk), `test_index.py`, `test_retrieve.py` (fake embedder + in-memory Qdrant).
+  - Part 1: `test_features.py`, `test_battery.py`, `test_factory.py`, `test_policies.py`, `test_qlearning.py`, `test_simulate.py`, `test_train.py`, `test_tune_q.py`, `test_part1.py`. They use the `synthetic_prices` fixture, and check the `step()` invariants, hand-computed savings, determinism, and that 1 and 2 workers give the same results.
+  - Agent: `test_agent_llm.py`, `test_agent_tools.py`, `test_agent_loop.py` (scripted fake LLM: `T_max`, tool errors, citations and the repair round), `test_agent_render.py`, `test_agent_prompts.py`, `test_agent_settings.py`, `test_agent_eval.py`.
   - Dashboard: `test_app_model.py`, `test_app_charts.py`, `test_app_helpers.py`, `test_app.py` (Streamlit `AppTest`; no keys, and `load_env` is patched so `.env` is never read), and `test_app_consistency.py` (the dashboard's means equal the agent tool's, so the charts and the chat can't disagree).
-- **Planned:**
-  - a check that an article's text is present in its chunk
-  - agent loop tests with a scripted fake LLM (`T_max`, tool errors, citations)
 
 ## 14. Documentation conventions
 
@@ -375,8 +381,9 @@ Training uses a fixed seed that is recorded in the policy's `.json`. Before subm
 Example:
 
 ```python
-def simulate(policy: str | Policy, start: date, end: date,
-             preset: str | BatteryPreset, prices: pd.DataFrame | None = None) -> SimulationResult:
+def simulate(policy: Policy | str, start: date, end: date,
+             preset: BatteryPreset | str, prices: pd.DataFrame | None = None,
+             ...) -> SimulationResult:
     """Replay a dispatch policy hour by hour over real bolsa prices.
 
     Savings are measured against having no battery: under A2, every discharged

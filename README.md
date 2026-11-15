@@ -33,7 +33,7 @@ Hay dos opciones.
 
 ### Opción 1: demo en línea (sin instalar nada)
 
-Abre **<URL de la demo>**. La aplicación está publicada en Streamlit Community Cloud, con las claves guardadas como secretos del servidor, así que el asistente y la búsqueda semántica funcionan completos. Tarda cerca de un minuto en iniciar.
+Abre **[proyecto-final-ia-2gu6ukfurpuqmts3fz7x37.streamlit](https://proyecto-final-ia-2gu6ukfurpuqmts3fz7x37.streamlit.app/)**. La aplicación está publicada en Streamlit Community Cloud, con las claves guardadas como secretos del servidor, así que el asistente y la búsqueda semántica funcionan completos. Tarda cerca de un minuto en iniciar.
 
 ### Opción 2: instalación local
 

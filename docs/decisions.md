@@ -95,7 +95,7 @@ The manifest also has `selector` (the CSS selector for the main content), `in_fo
 
 ## D9. Battery options are a fixed set of presets
 
-**Status:** Decided (2026-11-12; preset values and training approach decided 2026-11-13)
+**Status:** Decided (2026-11-12; preset values and training approach decided 2026-11-13). Preset values superseded by D15 (4 h / 8 h / 12 h).
 
 The user picks the battery from a fixed list of presets (capacity kWh / power kW / efficiency), not free values. So every policy can be trained ahead of time, and the app never has to train while it runs.
 
@@ -107,7 +107,7 @@ The user picks the battery from a fixed list of presets (capacity kWh / power kW
 | 3 h | 300 kWh | 3 h | 4 |
 | 4 h | 400 kWh | 4 h | 5 |
 
-**Replaced on branch `explore/factory-schedule` by D15:** the presets there are 4 h, 8 h and 12 h (400, 800 and 1,200 kWh, still 100 kW and 90% round trip).
+**Replaced by D15:** the presets are now 4 h, 8 h and 12 h (400, 800 and 1,200 kWh, still 100 kW and 90% round trip).
 
 **One Q-table per preset.** Each preset has its own duration, so this is the same as one per duration.
 - **Why not one agent for all batteries:** in tabular Q-learning, adding the preset to the state just splits one table into separate parts that share nothing. The number of charge levels also differs per preset.
@@ -175,10 +175,10 @@ Expectation, to state honestly in the report: the daily pattern is regular, so t
 - **Exploration:** ε decays linearly from 1.0 to 0.05.
 - **Passes:** at most 300 over the training weeks, with early stopping after 20 unchanged passes.
 - **Fixed schedule:** charge from 02:00 and discharge from 18:00, for `duration_h` hours each.
-- **Storage:** each Q-table is `float32`, written with `np.savez_compressed` plus a small `.json`, at 1.7–2.7 KB per preset. No pickle.
+- **Storage:** each Q-table is `float32`, written with `np.savez_compressed` plus a small `.json`, at 1.7–2.7 KB per preset (pre-D15; with the D15 presets of 4 / 8 / 12 h the 2025 tables are about 8 / 15 / 22 KB). No pickle.
 - **Training runs:** the jobs (preset × year) run in parallel processes. Each job's seed depends only on (base seed, preset, year), so results are identical whatever the number of workers. Training takes 2.7 s per table; the three 2025 tables take 3.6 s in parallel versus 7.0 s one after another.
 
-**Results, scenario 2025 (2026-11-13; test October–December 2025, savings in COP):**
+**Results, scenario 2025 (pre-D15, 2 / 3 / 4 h presets; 2026-11-13; test October–December 2025, savings in COP):**
 
 | Preset | Q-learning | Fixed schedule | Perfect foresight | Q ÷ schedule | Q ÷ perfect |
 |---|---|---|---|---|---|
@@ -186,7 +186,7 @@ Expectation, to state honestly in the report: the daily pattern is regular, so t
 | 3 h | 4.51 M | 4.73 M | 5.43 M | 95% | 83% |
 | 4 h | 4.84 M | 5.01 M | 6.12 M | 97% | 79% |
 
-**Decided: report this as it is.** Q-learning comes close to the fixed schedule but stays below it. We checked that this isn't a bug:
+**Decided (pre-D15): report this as it is.** Q-learning comes close to the fixed schedule but stays below it. We checked that this isn't a bug:
 - It is also slightly below on the training months (0.99).
 - No variant beat the schedule (2 h battery, Q ÷ schedule on the test months):
 
@@ -206,13 +206,13 @@ Why, for the report:
 - **The schedule's hours were chosen from the 2024–2025 hourly profile**, which includes the test months, so it has a small information advantage.
 - **Q-learning found nearly the same rule on its own** from January–September, without being told the hours.
 
-**On branch `explore/factory-schedule`, D15 extends this setting:** a factory shift schedule, longer batteries, and a state that knows today's shift.
+**D15 extends this setting:** a factory shift schedule, longer batteries, and a state that knows today's shift.
 
 The test on synthetic data checks Q-learning ≥ 90% of the fixed schedule. A threshold relative to perfect foresight was dropped: there, even the schedule only reaches 75–84%, because perfect foresight profits from the noise.
 
 ## D15. Factory shift schedule, long batteries and shift-aware Q-learning
 
-**Status:** Decided (2026-11-13), on branch `explore/factory-schedule`. Changes parts of D9 and D14 and keeps the rest.
+**Status:** Decided (2026-11-13), merged into `main`. Changes parts of D9 and D14 and keeps the rest.
 
 **Why:** under D14 the factory always runs. The daily price pattern is so regular that a hand-made rule ("charge at 02:00, discharge at 18:00") is near-optimal, and Q-learning only reaches 95–97% of it. When the factory doesn't always run, the decision becomes truly sequential: stored energy is only worth something if a future hour with the factory on comes at a high price. That's where learning helps.
 
@@ -553,7 +553,7 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 - **Chunking** (`uv run python -m energy.rag.chunk` → `data/corpus/chunks.jsonl`, committed, deterministic). CREG documents are split on `## ARTÍCULO n` **and `## ANEXO n.`** headings, keeping the heading line in the chunk text. Long sections are split further (`RecursiveCharacterTextSplitter`, 900 / 120, drop chunks under 30 characters), and every piece keeps its section label (`"12"`, `"Anexo 1"`). XM documents are split directly. Result: **984 chunks**; 90% of CREG chunks carry an article or annex label, and the rest are preambles.
 - **Annexes as their own sections:** the first run labeled all annex text as the last article. For example, CREG 131's eligibility rules (Anexo 1) were cited as "Art. 8". `clean.mark_annexes` now marks bare `ANEXO n.` lines. Bold quoted annexes of other resolutions (`**ANEXO CO.4.**` inside Art. 95 of 101 113) stay inside the amending article, as quoted articles do (D11).
 - **Embedding text:** `"{title} — Artículo n"` (or `— Anexo n`), a blank line, then the chunk text. A continuation piece of a long article stays findable by its document and article, while the displayed text stays clean.
-- **Index** (`uv run python -m energy.rag.index`): NVIDIA `nemotron-3-embed-1b` (dimension 2048), `qdrant-client` used directly (no `langchain_qdrant`), collection `regulacion`, cosine, at `data/qdrant/` (gitignored, D8). About 42 s for 984 chunks. `.env` is loaded in the entry point only.
+- **Index** (`uv run python -m energy.rag.index`): NVIDIA `nemotron-3-embed-1b` (dimension 2048), `qdrant-client` used directly (no `langchain_qdrant`), collection `regulacion`, cosine, at `data/qdrant/` (committed since 2026-11-14, D17; only `.lock` files are ignored). About 42 s for 984 chunks. `.env` is loaded in the entry point only.
 - **Retrieval** (`energy/rag/retrieve.py`): `Hit` with a `citation` such as "Resolución CREG 131 de 1998 …, Anexo 1", plus `in_force` / `superseded_by`. `open_retriever()` uses Qdrant + NVIDIA when the key and the index exist, and otherwise falls back to our own **BM25** over `chunks.jsonl`. Manual check: `uv run python -m energy.rag.retrieve "pregunta" [--bm25]`.
 - **Threshold 0.25 kept.** In the sample questions, relevant hits score 0.37–0.68, and the out-of-corpus question ("receta de arepas") tops out at 0.12, so it gets 0 hits. Observations for the agent prompt and the evaluation:
   - For "eficiencia mínima… SAEB", the top hit is the **replaced** CREG 098, and the current 101 113 Art. 6 comes second. The agent must use `in_force` to prefer the current rule.
@@ -568,7 +568,7 @@ Q-learning ÷ perfect foresight is 74% / 70% / 69%. The settings were tuned on 8
 - The README gives two install paths: `uv sync`, or `python -m venv .venv` + `pip install -r requirements.txt` for anyone without uv.
 - We use uv rather than conda because it's faster, installs every package we need from pip, and records exact versions. Conda's advantage, heavy native packages such as CUDA or GDAL, doesn't apply here.
 
-**Deployment:** the requirement is that the app runs from the README on a local machine (the demo and the grader). We don't need a server. If we want a public URL later, Streamlit Community Cloud builds its environment from `requirements.txt`, and the API keys go in its secrets settings.
+**Deployment:** the requirement is that the app runs from the README on a local machine (the demo and the grader). We don't need a server. If we want a public URL later, Streamlit Community Cloud builds its environment from `requirements.txt`, and the API keys go in its secrets settings. Done in D17: the app is deployed on Streamlit Community Cloud, with the keys in its secrets (`app.load_secrets()`).
 
 ## D8. Data is tracked in git
 
@@ -594,9 +594,9 @@ Code documentation: Google-style docstrings, a module docstring for every module
 ## Open questions
 
 - ~~**O1. MDP specification**~~: resolved in D14.
-- **O2. Solver:** leaning toward **Q-learning** (2026-11-12). It learns from the real price series without a price-transition model. Fall back to value iteration if Q-learning doesn't converge or its results are unstable. Both use the same data.
-- ~~**O3. Baselines**~~: resolved in D14 (do nothing, the fixed schedule and perfect foresight), with the results for 2025.
-- ~~**O4. Battery presets**~~: resolved in D9 (2 h, 3 h and 4 h at 100 kW, 90% round trip, starting empty).
+- **O2. Solver:** leaning toward **Q-learning** (2026-11-12). It learns from the real price series without a price-transition model. Fall back to value iteration if Q-learning doesn't converge or its results are unstable. Both use the same data. **Resolved: tabular Q-learning (D14, D15).**
+- ~~**O3. Baselines**~~: resolved in D14 (do nothing, the fixed schedule and perfect foresight), with the results for 2025. (replaced by D15: shift schedule and tuned price rule are the strongest baselines)
+- ~~**O4. Battery presets**~~: resolved in D9 (2 h, 3 h and 4 h at 100 kW, 90% round trip, starting empty). (presets replaced by D15: 4 h / 8 h / 12 h)
 - ~~**O5. Year and split**~~: resolved in D5 (changed 2026-11-13: within-year scenarios, train January–September and test October–December, 2025 first).
 - **O6. RAG document list** (see D6): a first version is downloaded. Revisit after reading the documents, especially for behind-the-meter batteries.
 - ~~**O7. Price state definition**~~: resolved in D14 (price ÷ the trailing 168-hour mean, 4 quartile bins).
@@ -608,20 +608,7 @@ Code documentation: Google-style docstrings, a module docstring for every module
   - Old constant names stay as aliases.
   - **One finding:** the project isn't installed as a package (`pyproject.toml` has no build system), so `python -m energy...` still needs the repo root as the working directory, or `PYTHONPATH` set to it. The *paths* no longer depend on where you start. `streamlit run app.py` from the root is unaffected.
 
-  The original note follows.
-- **O8. To do: `energy/config.py` + root-anchored paths** (deferred 2026-11-12). Today every command must run from the repo root, because the path defaults are relative (`data/...`). Do it when the first module runs from somewhere else (a notebook, the eval, the app) or needs shared settings (model names, `T_max`, thresholds). How:
-  - build every path from `Path(__file__).resolve().parents[1]`
-  - load `.env` only in entry points, never on import, so tests don't pick up real keys
-  - move `USER_AGENT` and the minimum-text-length constant there (currently duplicated)
-  - keep the CLI flags
-
-  Trade-off: it's global state that every module depends on, and it changes working code. That's why we're waiting until it's needed.
-- ~~**O9**~~: done (2026-11-13), `energy/data/prices.py`. The original note follows.
-- **O9. To do: `energy/data/prices.py`** (`load_prices()` + train/test split; deferred 2026-11-12). This is the first step of Part 1, and O7 is now defined (D14). It should provide:
-- the within-year split by date (D5)
-- the trailing 168-hour mean, computed over the **whole** series before splitting, so each split gets its warm-up from the hours just before it
-
-Until then, nothing reads the CSV.
+- ~~**O9**~~: done (2026-11-13), `energy/data/prices.py`.
 
 ## Known limitations (for the README and report)
 
@@ -632,8 +619,8 @@ Until then, nothing reads the CSV.
 - Only the fixed battery presets are supported (D9).
 - The agent knows the current hour's price when deciding (A4), but the real bolsa price is settled after the fact, so the savings are optimistic.
 - Each scenario is tested on only three months (October–December) of one year (D5).
-- On 2025, Q-learning earns 95–97% of a simple fixed schedule. With such a regular daily price pattern, learning adds little over a well-chosen rule (D14).
-- **Branch `explore/factory-schedule` (D15):**
+- Before the factory shifts (D14), Q-learning reached only 95–97% of a fixed schedule. With shifts and long batteries (D15) it matches or beats the strongest rule: Q ÷ best rule 0.99 / 1.05 / 1.15 for 4 / 8 / 12 h on Oct–Dec 2025 (`results/part1/summary.md`).
+- **D15 (merged into `main`):**
   - The factory's shift schedule is synthetic (A5), and the factory's load is all or nothing.
   - Q-learning's edge over the best tuned rule is modest: +7% for 8 h and +11% for 12 h after parameter tuning, and a tie for 4 h.
   - Q-learning reaches only 69–74% of perfect foresight.
