@@ -21,6 +21,7 @@ from energy.eval.agent_eval import (
     Question,
     evaluate,
     load_questions,
+    main,
     score,
     summary_markdown,
     write_outputs,
@@ -229,3 +230,106 @@ def test_evaluate_scores_records_models_pauses_and_writes(registry, tmp_path):
     assert written[1]["cita_ok"] == ""  # not applicable → empty cell
     lines = (tmp_path / "transcripts.jsonl").read_text(encoding="utf-8").splitlines()
     assert json.loads(lines[1])["respuesta"] == REFUSAL
+
+
+# --- merging, --fresh, incremental writes, fallback line -------------------------------
+
+PRIMARY = config.GROQ_MODELS[0]
+QUESTIONS_YAML = (
+    "- {id: 1, tipo: trampa, pregunta: uno, rechazo_esperado: true}\n"
+    "- {id: 2, tipo: trampa, pregunta: dos, rechazo_esperado: true}\n"
+)
+
+
+class Flaky:
+    """Answers `answers` in order, then raises like a dead process would."""
+
+    def __init__(self, answers: list[str]) -> None:
+        self.answers = list(answers)
+
+    def __call__(self, messages, tools):
+        if not self.answers:
+            raise RuntimeError("boom")
+        return ChatReply(self.answers.pop(0), model=PRIMARY)
+
+
+def run_main(monkeypatch, registry, tmp_path, chat, *extra: str) -> int:
+    import energy.agent.loop as loop
+
+    monkeypatch.setenv("GROQ_API_KEY", "x")
+    monkeypatch.setattr(config, "load_env", lambda: None)
+    monkeypatch.setattr(loop, "open_agent", lambda retriever=None: (registry, chat))
+    return main(
+        ["--questions", str(write_yaml(tmp_path, QUESTIONS_YAML)), "--out", str(tmp_path / "out"), "--pause", "0", *extra]
+    )
+
+
+def read_jsonl(out: Path) -> list[dict]:
+    return [json.loads(line) for line in (out / "transcripts.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def read_csv(out: Path) -> list[dict]:
+    with (out / "agent_eval.csv").open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def test_rerun_merges_by_id_and_keeps_the_others(monkeypatch, registry, tmp_path):
+    out = tmp_path / "out"
+    run_main(monkeypatch, registry, tmp_path, Flaky(["primera 1", "primera 2"]))
+    run_main(monkeypatch, registry, tmp_path, Flaky(["segunda 2"]), "--ids", "2")
+    transcripts = read_jsonl(out)
+    assert [t["id"] for t in transcripts] == [1, 2]
+    assert [t["respuesta"] for t in transcripts] == ["primera 1", "segunda 2"]
+    assert [r["id"] for r in read_csv(out)] == ["1", "2"]
+    assert "| 1 |" in (out / "summary.md").read_text(encoding="utf-8")
+
+
+def test_merge_sorts_when_rerunning_the_lower_id(monkeypatch, registry, tmp_path):
+    run_main(monkeypatch, registry, tmp_path, Flaky(["a", "b"]))
+    run_main(monkeypatch, registry, tmp_path, Flaky(["nueva"]), "--ids", "1")
+    assert [(t["id"], t["respuesta"]) for t in read_jsonl(tmp_path / "out")] == [(1, "nueva"), (2, "b")]
+
+
+def test_fresh_discards_previous_outputs(monkeypatch, registry, tmp_path):
+    run_main(monkeypatch, registry, tmp_path, Flaky(["a", "b"]))
+    run_main(monkeypatch, registry, tmp_path, Flaky(["solo 2"]), "--ids", "2", "--fresh")
+    assert [t["id"] for t in read_jsonl(tmp_path / "out")] == [2]
+    assert [r["id"] for r in read_csv(tmp_path / "out")] == ["2"]
+
+
+def test_old_transcripts_without_fila_are_ignored(monkeypatch, registry, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "transcripts.jsonl").write_text(json.dumps({"id": 7, "checks": {}}) + "\n", encoding="utf-8")
+    run_main(monkeypatch, registry, tmp_path, Flaky(["a", "b"]))
+    assert [t["id"] for t in read_jsonl(out)] == [1, 2]
+
+
+def test_first_answer_is_on_disk_when_the_second_question_dies(monkeypatch, registry, tmp_path):
+    with pytest.raises(RuntimeError, match="boom"):
+        run_main(monkeypatch, registry, tmp_path, Flaky(["salvada"]))
+    out = tmp_path / "out"
+    assert [t["respuesta"] for t in read_jsonl(out)] == ["salvada"]
+    assert [r["id"] for r in read_csv(out)] == ["1"]
+    assert (out / "summary.md").exists()
+
+
+def test_on_result_is_called_after_each_question(registry):
+    seen: list[tuple[int, int]] = []
+    chat = Flaky(["a", "b"])
+    evaluate([REG, TRAP], registry, chat, pause_s=0, on_result=lambda row, t: seen.append((row["id"], t["fila"]["id"])))
+    assert seen == [(1, 1), (9, 9)]
+
+
+def test_transcript_stores_the_row_with_nulls_preserved(registry):
+    rows, transcripts = evaluate([TRAP], registry, Flaky([REFUSAL]), pause_s=0)
+    fila = json.loads(json.dumps(transcripts[0]["fila"]))
+    assert fila == rows[0] and fila["cita_ok"] is None
+
+
+def test_summary_lists_fallback_answers_only_when_present(registry):
+    rows, _ = evaluate([REG, TRAP], registry, Flaky(["a", "b"]), pause_s=0)
+    assert "modelo de respaldo" not in summary_markdown(rows, UserSettings(), "fake")
+    rows[1]["modelos"] = f"{PRIMARY} {config.GROQ_MODELS[1]}"
+    summary = summary_markdown(rows, UserSettings(), "fake")
+    assert "Respondidas con el modelo de respaldo: 9." in summary

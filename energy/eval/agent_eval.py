@@ -3,7 +3,7 @@
 Run from the repo root::
 
     uv run python -m energy.eval.agent_eval [--ids 1,5,9] [--pause 20] [--bm25]
-        [--questions energy/eval/agent_questions.yaml] [--out results/agent_eval]
+        [--questions energy/eval/agent_questions.yaml] [--out results/agent_eval] [--fresh]
 
 Input: ``config.AGENT_QUESTIONS``, a YAML list of questions with what each one expects
 (the fields are documented at the top of that file). Every question runs once, in a fresh
@@ -15,8 +15,15 @@ Outputs in ``--out``:
   False or empty when it doesn't apply or needs a human (a decline that isn't the exact
   refusal phrase). ``aprobada`` is empty when any applicable check is empty, and
   ``revision_manual`` is left blank for the reviewer.
-* ``transcripts.jsonl``: the full answer, tool calls, citations and models per question.
-* ``summary.md``: the rates for the report.
+* ``transcripts.jsonl``: the full answer, tool calls, citations and models per question,
+  plus the CSV row (``fila``), which is the source of truth when outputs are merged.
+* ``summary.md``: the rates for the report, and the ids answered by the fallback model.
+
+Outputs are written after every question, so a crash keeps the answers already paid for.
+They are also merged by id with what is already in ``--out``: a partial run (``--ids``)
+replaces only the questions it ran and keeps the rest, sorted by id. ``--fresh`` ignores
+the existing outputs and starts from empty. A transcript file without ``fila`` (older
+format) is treated as absent.
 
 Needs ``GROQ_API_KEY``. Questions are spaced by ``--pause`` seconds because the free tier
 allows 8,000 tokens per minute; a fallback to the 20b model shows in ``modelos`` (D16).
@@ -211,8 +218,13 @@ def evaluate(
     pause_s: float = DEFAULT_PAUSE_S,
     sleep: Callable[[float], None] = time.sleep,
     settings: UserSettings | None = None,
+    on_result: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run every question in a fresh chat and score it.
+
+    Args:
+        on_result: Called after each question with its row and transcript, so the caller
+            can persist progress before the next (paid) question runs.
 
     Returns:
         ``(rows, transcripts)``: the CSV rows and the full records, in question order.
@@ -230,41 +242,42 @@ def evaluate(
         checks = score(q, result)
         called = [c.name for c in result.tool_calls]
         models = sorted(set(recorder.models))
-        rows.append(
-            {
-                "id": q.id,
-                "tipo": q.tipo,
-                "pregunta": " ".join(q.pregunta.split())[:120],
-                "herramientas_esperadas": " ".join(q.herramientas_esperadas),
-                "herramientas_llamadas": " ".join(called),
-                **checks,
-                "citas": " ; ".join(result.citations),
-                "citas_no_verificadas": " ; ".join(result.unverified_citations),
-                "detenido": result.stopped,
-                "llamadas_llm": len(recorder.models),
-                "modelos": " ".join(models),
-                "segundos": seconds,
-                "revision_manual": "",
-                "notas": q.notas,
-            }
-        )
-        transcripts.append(
-            {
-                "id": q.id,
-                "pregunta": q.pregunta,
-                "respuesta": result.answer,
-                "texto_modelo": result.model_text,
-                "bloque_resultados": result.results_block,
-                "llamadas": [asdict(c) for c in result.tool_calls],
-                "citas": result.citations,
-                "citas_no_verificadas": result.unverified_citations,
-                "detenido": result.stopped,
-                "retriever": result.retriever,
-                "modelos_por_llamada": recorder.models,
-                "segundos": seconds,
-                "checks": checks,
-            }
-        )
+        row = {
+            "id": q.id,
+            "tipo": q.tipo,
+            "pregunta": " ".join(q.pregunta.split())[:120],
+            "herramientas_esperadas": " ".join(q.herramientas_esperadas),
+            "herramientas_llamadas": " ".join(called),
+            **checks,
+            "citas": " ; ".join(result.citations),
+            "citas_no_verificadas": " ; ".join(result.unverified_citations),
+            "detenido": result.stopped,
+            "llamadas_llm": len(recorder.models),
+            "modelos": " ".join(models),
+            "segundos": seconds,
+            "revision_manual": "",
+            "notas": q.notas,
+        }
+        rows.append(row)
+        transcript = {
+            "id": q.id,
+            "pregunta": q.pregunta,
+            "respuesta": result.answer,
+            "texto_modelo": result.model_text,
+            "bloque_resultados": result.results_block,
+            "llamadas": [asdict(c) for c in result.tool_calls],
+            "citas": result.citations,
+            "citas_no_verificadas": result.unverified_citations,
+            "detenido": result.stopped,
+            "retriever": result.retriever,
+            "modelos_por_llamada": recorder.models,
+            "segundos": seconds,
+            "checks": checks,
+            "fila": row,  # lets a later merge rebuild the CSV without re-parsing strings
+        }
+        transcripts.append(transcript)
+        if on_result:
+            on_result(row, transcript)
         logger.info("pregunta %s: aprobada=%s herramientas=%s modelos=%s", q.id, checks["aprobada"], called, models)
     return rows, transcripts
 
@@ -300,6 +313,9 @@ def summary_markdown(rows: list[dict[str, Any]], settings: UserSettings, retriev
         f"| Aprobadas (automático) | {_rate(rows, 'aprobada')} |",
         "",
     ]
+    fallback = [r["id"] for r in rows if any(m != config.GROQ_MODELS[0] for m in r["modelos"].split())]
+    if fallback:
+        lines += [f"Respondidas con el modelo de respaldo: {', '.join(str(i) for i in fallback)}.", ""]
     if pending:
         lines += [f"Pendientes de revisión manual: {', '.join(str(i) for i in pending)}.", ""]
     lines += ["| id | tipo | herramientas | cita | aprobada | modelos |", "|---|---|---|---|---|---|"]
@@ -324,6 +340,42 @@ def write_outputs(out: Path, rows: list[dict], transcripts: list[dict], summary:
     write_bytes_atomic(out / "summary.md", summary.encode("utf-8"))
 
 
+def load_transcripts(out: Path) -> list[dict[str, Any]]:
+    """Transcripts already in ``out`` that carry ``fila``; anything else counts as absent."""
+    path = out / "transcripts.jsonl"
+    if not path.exists():
+        return []
+    found = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            t = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a torn line must not block a new run
+        if isinstance(t, dict) and "id" in t and isinstance(t.get("fila"), dict):
+            found.append(t)
+    return found
+
+
+def merge_transcripts(existing: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``new`` replaces ``existing`` entries with the same id; the result is sorted by id."""
+    by_id = {t["id"]: t for t in existing}
+    by_id.update({t["id"]: t for t in new})
+    return [by_id[i] for i in sorted(by_id)]
+
+
+def write_merged(out: Path, transcripts: list[dict[str, Any]], settings: UserSettings) -> str:
+    """Rebuild the CSV and summary from the transcripts' rows, write all three files.
+
+    Returns:
+        The summary text.
+    """
+    rows = [t["fila"] for t in transcripts]
+    retriever = next((t["retriever"] for t in transcripts if t.get("retriever")), "")
+    summary = summary_markdown(rows, settings, retriever)
+    write_outputs(out, rows, transcripts, summary)
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     config.load_env()
@@ -334,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ids", help="comma-separated ids to run (default: all)")
     parser.add_argument("--pause", type=float, default=DEFAULT_PAUSE_S, help="seconds between questions")
     parser.add_argument("--bm25", action="store_true", help="force the BM25 retriever")
+    parser.add_argument("--fresh", action="store_true", help="ignore existing outputs in --out")
     parser.add_argument("--out", type=Path, default=config.RESULTS_DIR / "agent_eval")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -354,10 +407,15 @@ def main(argv: list[str] | None = None) -> int:
     retriever = BM25Retriever(read_chunks(config.CHUNKS_PATH)) if args.bm25 else None
     registry, chat = open_agent(retriever)
     settings = UserSettings()
-    rows, transcripts = evaluate(questions, registry, chat, pause_s=args.pause, settings=settings)
-    retriever_name = next((t["retriever"] for t in transcripts if t["retriever"]), "")
-    summary = summary_markdown(rows, settings, retriever_name)
-    write_outputs(args.out, rows, transcripts, summary)
+    existing = [] if args.fresh else load_transcripts(args.out)
+    done: list[dict[str, Any]] = []
+
+    def save(_row: dict[str, Any], transcript: dict[str, Any]) -> None:
+        done.append(transcript)
+        write_merged(args.out, merge_transcripts(existing, done), settings)
+
+    evaluate(questions, registry, chat, pause_s=args.pause, settings=settings, on_result=save)
+    summary = write_merged(args.out, merge_transcripts(existing, done), settings)
     print(summary)
     print(f"Escrito en {args.out}")
     return 0

@@ -187,7 +187,19 @@ Write 10–15 fixed test questions, including trap questions, and record whether
 
 **Written (2026-11-13), live run pending:** 11 questions in `energy/eval/agent_questions.yaml` (4 regulation, 3 simulation, 1 mixed, 3 traps: off-topic, out of corpus, prompt injection), each with its expected and forbidden tools, simulation arguments, sources and answer patterns. `energy/eval/agent_eval.py` runs them in fresh chats with the default settings and writes `results/agent_eval/`. Offline tests in `tests/test_agent_eval.py`.
 
-**Done:**
+**Done (2026-11-14):**
+- **Live run:** `uv run python -m energy.eval.agent_eval --pause 30`. All answers came from `openai/gpt-oss-120b` with Qdrant + NVIDIA retrieval. The results are in `results/agent_eval/`.
+- **Results:**
+  - Correct tool: 9/11.
+  - Simulation arguments: 4/4.
+  - Expected source cited: 6/8.
+  - Exact refusal on traps: 2/3.
+  - Passed: **8/11**.
+- **Manual review** (in the CSV's `revision_manual` column): three real failures, recorded in D16 and the known limitations.
+  - Questions 1 and 4 were refused without searching.
+  - Question 11's injection succeeded.
+- **No second run with a fixed prompt for this delivery** (D16).
+- **Before the run:** the runner was changed to write after every question and to merge partial runs by id (`--fresh` to start empty). It was then checked with a one-question smoke run.
 
 ## 8. Deliverables
 
