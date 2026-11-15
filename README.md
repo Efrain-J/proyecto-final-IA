@@ -56,16 +56,16 @@ El usuario al que hiría dirijido este proyecto, es un usuario no regulado que p
    cp .env.example .env          # luego escribe tus claves en .env
    ```
 
-4. Abrir el dashboard. Queda en http://localhost:8501.
-
-   ```bash
-   uv run streamlit run app.py
-   ```
-
-5. Opcional, si tienes `NVIDIA_API_KEY`: construir el índice de búsqueda semántica. Tarda unos 45 s. Sin él, la búsqueda usa BM25.
+4. Si tienes `NVIDIA_API_KEY`: construir el índice de búsqueda semántica. Tarda unos 45 s. Sin él, la búsqueda usa BM25.
 
    ```bash
    uv run python -m energy.rag.index
+   ```
+
+5. Abrir el dashboard. Queda en http://localhost:8501.
+
+   ```bash
+   uv run streamlit run app.py
    ```
 
 6. Correr las pruebas. No necesitan internet ni claves.
